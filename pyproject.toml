@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Local-first personal knowledge assistant grounded in Gmail, Calendar, Docs, and local notes/transcripts."
 requires-python = ">=3.11"
 readme = "README.md"
-dependencies = []
+dependencies = [
+    "python-dotenv>=1.0",
+]
 
 [project.optional-dependencies]
 dev = [
