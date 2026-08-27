@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Environment / secrets
+.env
+*.token.json
+credentials.json
+token.json
+
+# Local data (index, raw ingested content, embeddings)
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Editor/OS
+.DS_Store
+.vscode/
+.idea/
