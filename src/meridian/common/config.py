@@ -21,7 +21,7 @@ class Config:
         return self.data_dir / "auth"
 
 
-def load_config(*, load_env_file: bool = True) -> Config:
+def load_config(*, load_env_file=True) -> Config:
     if load_env_file:
         load_dotenv()
 
