@@ -45,9 +45,9 @@ tests/              eval harness & unit tests (Phase 12+)
 
 ## Status
 
-Phase 1 (Google OAuth) and Phase 2 (Gmail ingestion) are implemented.
-Phases are built and confirmed one at a time; see `CLAUDE.md` in this repo
-for the working agreement.
+Phase 1 (Google OAuth), Phase 2 (Gmail ingestion), and Phase 3 (Calendar
+ingestion) are implemented. Phases are built and confirmed one at a time;
+see `CLAUDE.md` in this repo for the working agreement.
 
 ## Setup
 
@@ -96,4 +96,28 @@ Inspect what got stored:
 
 ```
 sqlite3 data/ingestion/gmail/gmail.db "select count(*) from messages;"
+```
+
+### Phase 3 (Calendar ingestion)
+
+Once Phase 1 auth is set up, run:
+
+```
+python -m meridian.ingestion.calendar
+```
+
+Syncs only your primary calendar. First run does a full backfill and stores
+everything in `data/ingestion/calendar/calendar.db`. Running it again only
+fetches what changed since the last run (via Calendar's sync tokens), so
+it's fast. Pass `--full-resync` to force a fresh full backfill. Set
+`CALENDAR_SYNC_TIME_MIN` in `.env` (e.g. `2024-01-01T00:00:00Z`) to scope
+the initial backfill to a narrower window instead of your calendar's entire
+history — note this only affects the first/forced full sync, since once a
+sync token exists, Google's API doesn't allow re-bounding incremental syncs
+by time.
+
+Inspect what got stored:
+
+```
+sqlite3 data/ingestion/calendar/calendar.db "select count(*) from events;"
 ```
