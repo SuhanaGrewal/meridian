@@ -45,9 +45,10 @@ tests/              eval harness & unit tests (Phase 12+)
 
 ## Status
 
-Phase 1 (Google OAuth), Phase 2 (Gmail ingestion), and Phase 3 (Calendar
-ingestion) are implemented. Phases are built and confirmed one at a time;
-see `CLAUDE.md` in this repo for the working agreement.
+Phase 1 (Google OAuth), Phase 2 (Gmail ingestion), Phase 3 (Calendar
+ingestion), and Phase 4 (Docs ingestion) are implemented. Phases are built
+and confirmed one at a time; see `CLAUDE.md` in this repo for the working
+agreement.
 
 ## Setup
 
@@ -120,4 +121,32 @@ Inspect what got stored:
 
 ```
 sqlite3 data/ingestion/calendar/calendar.db "select count(*) from events;"
+```
+
+### Phase 4 (Docs ingestion)
+
+Once Phase 1 auth is set up, run:
+
+```
+python -m meridian.ingestion.docs
+```
+
+First run does a full backfill of every Google Doc you can see (via Drive's
+file listing, since the Docs API itself can't enumerate documents) and
+stores everything in `data/ingestion/docs/docs.db`. Running it again only
+fetches what changed since the last run (via Drive's Changes API), skipping
+any doc whose `modifiedTime` hasn't changed without even fetching its
+content. Pass `--full-resync` to force a fresh full backfill. Set
+`DOCS_SYNC_DRIVE_QUERY` in `.env` (e.g. `"'<folder_id>' in parents"`) to
+scope the initial backfill to a narrower set of docs — note this only
+affects the first/forced full sync, since Drive's Changes API takes no
+query parameter at all once incremental syncing starts. An invalid/expired
+page token is detected via a best-effort inference (Google doesn't document
+an exact error contract here, unlike Calendar's documented 410) and
+automatically falls back to a full resync.
+
+Inspect what got stored:
+
+```
+sqlite3 data/ingestion/docs/docs.db "select count(*) from documents;"
 ```
