@@ -1,6 +1,6 @@
 from meridian.ingestion.docs.doc_parser import ParsedDoc
 from meridian.ingestion.docs.store import DocsStore
-from meridian.ingestion.docs.sync import SyncStats, _fetch_and_store
+from meridian.ingestion.docs.sync import SyncStats, _fetch_and_store, _full_backfill
 
 
 class _Request:
@@ -43,6 +43,61 @@ class _FakeDocsService:
 
     def documents(self):
         return self.documents_double
+
+
+class _FakeFiles:
+    def __init__(self, list_pages, call_log=None):
+        self._list_pages = [(page if isinstance(page, list) else [page]) for page in list_pages]
+        self.list_calls = []
+        self._call_log = call_log
+
+    def list(self, **kwargs):
+        self.list_calls.append(kwargs)
+        if self._call_log is not None:
+            self._call_log.append("files.list")
+        outcomes = self._list_pages.pop(0)
+        return _QueuedRequest(outcomes) if len(outcomes) > 1 else _Request(outcomes[0])
+
+
+class _FakeChanges:
+    def __init__(self, start_token_outcomes=None, list_pages=None, call_log=None):
+        self._start_token_outcomes = list(start_token_outcomes or [{"startPageToken": "start-1"}])
+        self._list_pages = [(page if isinstance(page, list) else [page]) for page in (list_pages or [])]
+        self.list_calls = []
+        self._call_log = call_log
+
+    def getStartPageToken(self, **kwargs):
+        if self._call_log is not None:
+            self._call_log.append("getStartPageToken")
+        if len(self._start_token_outcomes) > 1:
+            return _QueuedRequest(self._start_token_outcomes)
+        return _Request(self._start_token_outcomes[0])
+
+    def list(self, **kwargs):
+        self.list_calls.append(kwargs)
+        if self._call_log is not None:
+            self._call_log.append("changes.list")
+        outcomes = self._list_pages.pop(0)
+        return _QueuedRequest(outcomes) if len(outcomes) > 1 else _Request(outcomes[0])
+
+
+class _FakeDriveService:
+    def __init__(
+        self, *, start_token_outcomes=None, files_list_pages=None, changes_list_pages=None
+    ):
+        self.call_log: list[str] = []
+        self.files_double = _FakeFiles(files_list_pages or [], call_log=self.call_log)
+        self.changes_double = _FakeChanges(
+            start_token_outcomes=start_token_outcomes,
+            list_pages=changes_list_pages,
+            call_log=self.call_log,
+        )
+
+    def files(self):
+        return self.files_double
+
+    def changes(self):
+        return self.changes_double
 
 
 def _raw_document(doc_id: str, title: str = "Title", text: str = "Body") -> dict:
@@ -132,3 +187,93 @@ def test_fetch_and_store_handles_missing_file_id(tmp_path):
     _fetch_and_store(docs_service, store, {"name": "mystery"}, stats)
 
     assert stats.parse_failures == 1
+
+
+def test_full_backfill_stores_documents_and_persists_start_token(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    drive_service = _FakeDriveService(
+        start_token_outcomes=[{"startPageToken": "start-1"}],
+        files_list_pages=[
+            {"files": [{"id": "doc-1", "modifiedTime": "2024-01-01T00:00:00Z", "trashed": False}]}
+        ],
+    )
+    docs_service = _FakeDocsService(get_responses={"doc-1": _raw_document("doc-1")})
+
+    stats = _full_backfill(drive_service, docs_service, store)
+
+    assert stats.sync_type == "full"
+    assert stats.documents_fetched == 1
+    assert store.get_sync_state().page_token == "start-1"
+
+
+def test_full_backfill_calls_get_start_page_token_before_listing(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    drive_service = _FakeDriveService(files_list_pages=[{"files": []}])
+    docs_service = _FakeDocsService()
+
+    _full_backfill(drive_service, docs_service, store)
+
+    assert drive_service.call_log == ["getStartPageToken", "files.list"]
+
+
+def test_full_backfill_paginates_across_multiple_pages(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    drive_service = _FakeDriveService(
+        files_list_pages=[
+            {"files": [{"id": "doc-1", "modifiedTime": "t1", "trashed": False}], "nextPageToken": "p2"},
+            {"files": [{"id": "doc-2", "modifiedTime": "t2", "trashed": False}]},
+        ]
+    )
+    docs_service = _FakeDocsService(
+        get_responses={"doc-1": _raw_document("doc-1"), "doc-2": _raw_document("doc-2")}
+    )
+
+    stats = _full_backfill(drive_service, docs_service, store)
+
+    assert stats.documents_fetched == 2
+    assert store.count_documents() == 2
+
+
+def test_full_backfill_passes_extra_drive_query(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    drive_service = _FakeDriveService(files_list_pages=[{"files": []}])
+    docs_service = _FakeDocsService()
+
+    _full_backfill(drive_service, docs_service, store, drive_query="'folder-1' in parents")
+
+    query = drive_service.files_double.list_calls[0]["q"]
+    assert "mimeType='application/vnd.google-apps.document'" in query
+    assert "'folder-1' in parents" in query
+
+
+def test_full_backfill_is_idempotent_when_rerun(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    file_meta = {"id": "doc-1", "modifiedTime": "2024-01-01T00:00:00Z", "trashed": False}
+    raw_doc = _raw_document("doc-1")
+
+    drive_one = _FakeDriveService(files_list_pages=[{"files": [dict(file_meta)]}])
+    docs_one = _FakeDocsService(get_responses={"doc-1": raw_doc})
+    _full_backfill(drive_one, docs_one, store)
+
+    drive_two = _FakeDriveService(files_list_pages=[{"files": [dict(file_meta)]}])
+    docs_two = _FakeDocsService(get_responses={"doc-1": raw_doc})
+    _full_backfill(drive_two, docs_two, store)
+
+    assert store.count_documents() == 1
+    assert store.get_sync_state().page_token == "start-1"
+
+
+def test_full_backfill_tombstones_document_missing_from_fresh_listing(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(
+        ParsedDoc(doc_id="doc-stale", title="T", content_text="C", modified_time="x", content_hash="h")
+    )
+    drive_service = _FakeDriveService(
+        files_list_pages=[{"files": [{"id": "doc-1", "modifiedTime": "t1", "trashed": False}]}]
+    )
+    docs_service = _FakeDocsService(get_responses={"doc-1": _raw_document("doc-1")})
+
+    stats = _full_backfill(drive_service, docs_service, store)
+
+    assert stats.documents_trashed == 1
+    assert store.get_document_row("doc-stale")["is_trashed"] == 1
