@@ -57,3 +57,20 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env  # fill in OAuth client id/secret, notes folder path, etc.
 ```
+
+### Phase 1 prerequisites (Google OAuth)
+
+Before running `python -m meridian.auth`, set up a Google Cloud project:
+
+1. Create or select a project in [Google Cloud Console](https://console.cloud.google.com/).
+2. Enable the Gmail API, Google Calendar API, Google Docs API, and Google Drive API.
+3. Configure the OAuth consent screen (External + Testing mode is fine for
+   personal use) and add your own Google account as a test user.
+4. Create an OAuth 2.0 Client ID of type **Desktop app**.
+5. Copy the client ID/secret into `.env` as `GOOGLE_OAUTH_CLIENT_ID` and
+   `GOOGLE_OAUTH_CLIENT_SECRET`.
+
+Then run `python -m meridian.auth` — a browser window opens asking you to
+approve read-only access to Gmail, Calendar, Docs, and Drive. Credentials
+are stored encrypted under `data/auth/`. Running it again reuses the stored
+credentials (refreshing automatically if expired) without re-prompting.
