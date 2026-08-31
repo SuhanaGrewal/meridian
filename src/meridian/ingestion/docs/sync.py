@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from googleapiclient.errors import HttpError
+
 from meridian.common.google_api import execute_with_retry
 from meridian.common.rate_limiter import TokenBucket
 from meridian.ingestion.docs.doc_parser import DocParseError, parse_document
@@ -132,3 +134,87 @@ def _full_backfill(
     store.set_sync_state(starting_page_token)
 
     return stats
+
+
+class _ChangesTokenInvalid(Exception):
+    pass
+
+
+def _incremental_sync(
+    drive_service,
+    docs_service,
+    store: DocsStore,
+    *,
+    rate_limiter: TokenBucket | None = None,
+    logger: logging.Logger | None = None,
+    page_token: str,
+) -> SyncStats:
+    stats = SyncStats(sync_type="incremental")
+    latest_page_token = page_token
+
+    while True:
+        request = drive_service.changes().list(pageToken=page_token, fields=_CHANGES_FIELDS)
+        try:
+            response = execute_with_retry(
+                request,
+                rate_limiter=rate_limiter,
+                logger=logger,
+                operation="docs.changes_list",
+            )
+        except HttpError as exc:
+            # google does not document a specific status/reason for an
+            # invalid changes.list page token (unlike calendar's documented
+            # 410) - this call's only params are code-controlled, so a 400
+            # here is treated as a best-effort signal the token expired.
+            # falling back to a full resync is always correct regardless.
+            if getattr(exc.resp, "status", None) == 400:
+                raise _ChangesTokenInvalid() from exc
+            raise
+
+        for change in response.get("changes", []):
+            _apply_change(docs_service, store, change, stats, rate_limiter=rate_limiter, logger=logger)
+
+        latest_page_token = response.get("newStartPageToken", latest_page_token)
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    store.set_sync_state(latest_page_token)
+    return stats
+
+
+def _apply_change(
+    docs_service,
+    store: DocsStore,
+    change: dict,
+    stats: SyncStats,
+    *,
+    rate_limiter: TokenBucket | None,
+    logger: logging.Logger | None,
+) -> None:
+    if change.get("removed"):
+        file_id = change.get("fileId")
+        if file_id:
+            store.mark_trashed(file_id)
+            stats.documents_trashed += 1
+        return
+
+    file_meta = change.get("file") or {}
+    file_id = file_meta.get("id") or change.get("fileId")
+
+    if file_meta.get("trashed"):
+        if file_id:
+            store.mark_trashed(file_id)
+            stats.documents_trashed += 1
+        return
+
+    if file_meta.get("mimeType") != _DOC_MIME_TYPE:
+        # a doc that's no longer a doc, or an unrelated drive file
+        # surfacing in this drive-wide stream - only act if we actually
+        # know about it locally.
+        if file_id and store.get_modified_time(file_id) is not None:
+            store.mark_trashed(file_id)
+            stats.documents_trashed += 1
+        return
+
+    _fetch_and_store(docs_service, store, file_meta, stats, rate_limiter=rate_limiter, logger=logger)

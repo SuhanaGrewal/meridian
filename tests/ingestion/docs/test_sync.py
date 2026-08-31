@@ -1,6 +1,28 @@
+import json
+
+import httplib2
+import pytest
+from googleapiclient.errors import HttpError
+
 from meridian.ingestion.docs.doc_parser import ParsedDoc
 from meridian.ingestion.docs.store import DocsStore
-from meridian.ingestion.docs.sync import SyncStats, _fetch_and_store, _full_backfill
+from meridian.ingestion.docs.sync import (
+    SyncStats,
+    _ChangesTokenInvalid,
+    _fetch_and_store,
+    _full_backfill,
+    _incremental_sync,
+)
+
+
+def _http_error(status: int, *, retry_after: str | None = None, reason: str | None = None) -> HttpError:
+    headers = {"status": str(status)}
+    if retry_after is not None:
+        headers["retry-after"] = retry_after
+    resp = httplib2.Response(headers)
+    errors = [{"reason": reason}] if reason else []
+    content = json.dumps({"error": {"errors": errors}}).encode("utf-8")
+    return HttpError(resp, content)
 
 
 class _Request:
@@ -277,3 +299,152 @@ def test_full_backfill_tombstones_document_missing_from_fresh_listing(tmp_path):
 
     assert stats.documents_trashed == 1
     assert store.get_document_row("doc-stale")["is_trashed"] == 1
+
+
+def _doc_change(doc_id: str, **overrides) -> dict:
+    file_meta = {
+        "id": doc_id,
+        "name": f"Doc {doc_id}",
+        "mimeType": "application/vnd.google-apps.document",
+        "modifiedTime": "2024-01-01T00:00:00Z",
+        "trashed": False,
+    }
+    file_meta.update(overrides)
+    return {"fileId": doc_id, "removed": False, "file": file_meta}
+
+
+def test_incremental_sync_uses_stored_page_token(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    drive_service = _FakeDriveService(
+        changes_list_pages=[{"changes": [], "newStartPageToken": "token-2"}]
+    )
+    docs_service = _FakeDocsService()
+
+    stats = _incremental_sync(drive_service, docs_service, store, page_token="token-1")
+
+    assert stats.sync_type == "incremental"
+    assert drive_service.changes_double.list_calls[0]["pageToken"] == "token-1"
+    assert store.get_sync_state().page_token == "token-2"
+
+
+def test_incremental_sync_fetches_doc_mimetype_and_ignores_others(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    non_doc_change = _doc_change("file-1", mimeType="application/vnd.google-apps.spreadsheet")
+    doc_change = _doc_change("doc-1")
+    drive_service = _FakeDriveService(
+        changes_list_pages=[{"changes": [non_doc_change, doc_change], "newStartPageToken": "token-2"}]
+    )
+    docs_service = _FakeDocsService(get_responses={"doc-1": _raw_document("doc-1")})
+
+    stats = _incremental_sync(drive_service, docs_service, store, page_token="token-1")
+
+    assert stats.documents_fetched == 1
+    assert store.count_documents() == 1
+
+
+def test_incremental_sync_removed_change_tombstones_by_file_id_alone(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(
+        ParsedDoc(doc_id="doc-1", title="T", content_text="C", modified_time="x", content_hash="h")
+    )
+    drive_service = _FakeDriveService(
+        changes_list_pages=[
+            {"changes": [{"fileId": "doc-1", "removed": True}], "newStartPageToken": "token-2"}
+        ]
+    )
+    docs_service = _FakeDocsService()
+
+    stats = _incremental_sync(drive_service, docs_service, store, page_token="token-1")
+
+    assert stats.documents_trashed == 1
+    assert store.get_document_row("doc-1")["is_trashed"] == 1
+
+
+def test_incremental_sync_trashed_file_tombstones_using_file_object(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(
+        ParsedDoc(doc_id="doc-1", title="T", content_text="C", modified_time="x", content_hash="h")
+    )
+    trashed_change = _doc_change("doc-1", trashed=True)
+    drive_service = _FakeDriveService(
+        changes_list_pages=[{"changes": [trashed_change], "newStartPageToken": "token-2"}]
+    )
+    docs_service = _FakeDocsService()
+
+    stats = _incremental_sync(drive_service, docs_service, store, page_token="token-1")
+
+    assert stats.documents_trashed == 1
+    assert store.get_document_row("doc-1")["is_trashed"] == 1
+
+
+def test_incremental_sync_paginates_across_multiple_pages(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    drive_service = _FakeDriveService(
+        changes_list_pages=[
+            {"changes": [_doc_change("doc-1")], "nextPageToken": "p2"},
+            {"changes": [_doc_change("doc-2")], "newStartPageToken": "token-2"},
+        ]
+    )
+    docs_service = _FakeDocsService(
+        get_responses={"doc-1": _raw_document("doc-1"), "doc-2": _raw_document("doc-2")}
+    )
+
+    stats = _incremental_sync(drive_service, docs_service, store, page_token="token-1")
+
+    assert stats.documents_fetched == 2
+    assert store.get_sync_state().page_token == "token-2"
+
+
+def test_incremental_sync_known_doc_reappearing_as_non_doc_is_tombstoned(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(
+        ParsedDoc(doc_id="doc-1", title="T", content_text="C", modified_time="x", content_hash="h")
+    )
+    change = _doc_change("doc-1", mimeType="application/vnd.google-apps.spreadsheet")
+    drive_service = _FakeDriveService(
+        changes_list_pages=[{"changes": [change], "newStartPageToken": "token-2"}]
+    )
+    docs_service = _FakeDocsService()
+
+    stats = _incremental_sync(drive_service, docs_service, store, page_token="token-1")
+
+    assert stats.documents_trashed == 1
+    assert store.get_document_row("doc-1")["is_trashed"] == 1
+
+
+def test_incremental_sync_invalid_token_raises_changes_token_invalid(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    drive_service = _FakeDriveService(changes_list_pages=[_http_error(400)])
+    docs_service = _FakeDocsService()
+
+    with pytest.raises(_ChangesTokenInvalid):
+        _incremental_sync(drive_service, docs_service, store, page_token="token-1")
+
+
+def test_incremental_sync_permanent_error_propagates(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    drive_service = _FakeDriveService(
+        changes_list_pages=[_http_error(403, reason="insufficientPermissions")]
+    )
+    docs_service = _FakeDocsService()
+
+    with pytest.raises(HttpError):
+        _incremental_sync(drive_service, docs_service, store, page_token="token-1")
+
+
+def test_incremental_sync_rate_limited_then_succeeds(monkeypatch, tmp_path):
+    monkeypatch.setattr("meridian.common.google_api.time.sleep", lambda s: None)
+    monkeypatch.setattr("meridian.common.retry.time.sleep", lambda s: None)
+
+    store = DocsStore(tmp_path / "docs.db")
+    drive_service = _FakeDriveService(
+        changes_list_pages=[
+            [_http_error(429, retry_after="1"), {"changes": [], "newStartPageToken": "token-2"}]
+        ]
+    )
+    docs_service = _FakeDocsService()
+
+    stats = _incremental_sync(drive_service, docs_service, store, page_token="token-1")
+
+    assert stats.sync_type == "incremental"
+    assert store.get_sync_state().page_token == "token-2"
