@@ -138,6 +138,10 @@ class GmailStore:
                 (last_history_id, _now()),
             )
 
+    def clear_sync_state(self) -> None:
+        with self._conn:
+            self._conn.execute("DELETE FROM sync_state WHERE id = 1")
+
     def get_message_row(self, message_id: str) -> sqlite3.Row | None:
         return self._conn.execute(
             "SELECT * FROM messages WHERE message_id = ?", (message_id,)

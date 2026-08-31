@@ -45,9 +45,9 @@ tests/              eval harness & unit tests (Phase 12+)
 
 ## Status
 
-Skeleton only — no pipeline logic implemented yet. Phases are built and
-confirmed one at a time; see `CLAUDE.md` in this repo for the working
-agreement.
+Phase 1 (Google OAuth) and Phase 2 (Gmail ingestion) are implemented.
+Phases are built and confirmed one at a time; see `CLAUDE.md` in this repo
+for the working agreement.
 
 ## Setup
 
@@ -74,3 +74,26 @@ Then run `python -m meridian.auth` — a browser window opens asking you to
 approve read-only access to Gmail, Calendar, Docs, and Drive. Credentials
 are stored encrypted under `data/auth/`. Running it again reuses the stored
 credentials (refreshing automatically if expired) without re-prompting.
+
+### Phase 2 (Gmail ingestion)
+
+Once Phase 1 auth is set up, run:
+
+```
+python -m meridian.ingestion.gmail
+```
+
+First run does a full backfill of your mailbox (respecting a deliberately
+conservative self-imposed rate limit — this can take a while for a large
+mailbox) and stores everything in `data/ingestion/gmail/gmail.db`. Running
+it again only fetches what changed since the last run (via Gmail's History
+API), so it's fast. Pass `--full-resync` to force a fresh full backfill
+(e.g. if you want to re-pull everything). Set `GMAIL_SYNC_QUERY` in `.env`
+(e.g. `newer_than:365d`) to scope the initial backfill to a narrower window
+instead of your entire mailbox.
+
+Inspect what got stored:
+
+```
+sqlite3 data/ingestion/gmail/gmail.db "select count(*) from messages;"
+```

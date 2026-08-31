@@ -91,3 +91,12 @@ def test_set_sync_state_overwrites_previous_value(tmp_path):
     store.set_sync_state("222")
 
     assert store.get_sync_state().last_history_id == "222"
+
+
+def test_clear_sync_state_resets_to_none(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.set_sync_state("111")
+
+    store.clear_sync_state()
+
+    assert store.get_sync_state().last_history_id is None
