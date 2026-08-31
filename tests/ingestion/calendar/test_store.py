@@ -2,7 +2,9 @@ from meridian.ingestion.calendar.event_parser import ParsedEvent
 from meridian.ingestion.calendar.store import CalendarStore
 
 
-def _event(event_id="evt-1", calendar_id="primary", summary="Standup") -> ParsedEvent:
+def _event(
+    event_id="evt-1", calendar_id="primary", summary="Standup", start_at="2024-06-01T10:00:00-05:00"
+) -> ParsedEvent:
     return ParsedEvent(
         calendar_id=calendar_id,
         event_id=event_id,
@@ -12,7 +14,7 @@ def _event(event_id="evt-1", calendar_id="primary", summary="Standup") -> Parsed
         description="",
         location="",
         status="confirmed",
-        start_at="2024-06-01T10:00:00-05:00",
+        start_at=start_at,
         end_at="2024-06-01T10:30:00-05:00",
         is_all_day=False,
         organizer_email="alice@example.com",
@@ -77,3 +79,47 @@ def test_same_event_id_on_different_calendars_are_distinct_rows(tmp_path):
     store.upsert_event(_event(event_id="evt-1", calendar_id="shared-calendar"))
 
     assert store.count_events() == 2
+
+
+def test_mark_deleted_sets_tombstone_flag(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.upsert_event(_event())
+
+    store.mark_deleted("primary", "evt-1")
+
+    row = store.get_event_row("primary", "evt-1")
+    assert row["is_deleted"] == 1
+
+
+def test_tombstone_missing_marks_local_events_not_seen(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.upsert_event(_event(event_id="evt-1"))
+    store.upsert_event(_event(event_id="evt-2"))
+
+    tombstoned = store.tombstone_missing("primary", {"evt-1"})
+
+    assert tombstoned == 1
+    assert store.get_event_row("primary", "evt-1")["is_deleted"] == 0
+    assert store.get_event_row("primary", "evt-2")["is_deleted"] == 1
+
+
+def test_tombstone_missing_respects_min_start_at_scope(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.upsert_event(_event(event_id="evt-old", start_at="2020-01-01T00:00:00Z"))
+    store.upsert_event(_event(event_id="evt-new", start_at="2024-06-01T10:00:00-05:00"))
+
+    tombstoned = store.tombstone_missing("primary", set(), min_start_at="2024-01-01T00:00:00Z")
+
+    assert tombstoned == 1
+    assert store.get_event_row("primary", "evt-old")["is_deleted"] == 0
+    assert store.get_event_row("primary", "evt-new")["is_deleted"] == 1
+
+
+def test_tombstone_missing_with_no_scope_covers_all_local_events(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.upsert_event(_event(event_id="evt-old", start_at="2020-01-01T00:00:00Z"))
+
+    tombstoned = store.tombstone_missing("primary", set(), min_start_at=None)
+
+    assert tombstoned == 1
+    assert store.get_event_row("primary", "evt-old")["is_deleted"] == 1

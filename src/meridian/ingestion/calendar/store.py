@@ -99,6 +99,38 @@ class CalendarStore:
                 ),
             )
 
+    def mark_deleted(self, calendar_id: str, event_id: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "UPDATE events SET is_deleted = 1, updated_at = ? WHERE calendar_id = ? AND event_id = ?",
+                (_now(), calendar_id, event_id),
+            )
+
+    def list_event_ids(self, calendar_id: str, *, min_start_at: str | None = None) -> set[str]:
+        # string comparison assumes consistently-formatted timestamps; an
+        # all-day date ("2024-01-01") vs a full datetime on the same day
+        # can compare imprecisely at the exact boundary - acceptable for
+        # this scoping use, not worth normalizing further right now.
+        if min_start_at is None:
+            rows = self._conn.execute(
+                "SELECT event_id FROM events WHERE calendar_id = ? AND is_deleted = 0",
+                (calendar_id,),
+            )
+        else:
+            rows = self._conn.execute(
+                "SELECT event_id FROM events WHERE calendar_id = ? AND is_deleted = 0 AND start_at >= ?",
+                (calendar_id, min_start_at),
+            )
+        return {row["event_id"] for row in rows.fetchall()}
+
+    def tombstone_missing(
+        self, calendar_id: str, seen_event_ids: set[str], *, min_start_at: str | None = None
+    ) -> int:
+        missing = self.list_event_ids(calendar_id, min_start_at=min_start_at) - set(seen_event_ids)
+        for event_id in missing:
+            self.mark_deleted(calendar_id, event_id)
+        return len(missing)
+
     def get_event_row(self, calendar_id: str, event_id: str) -> sqlite3.Row | None:
         return self._conn.execute(
             "SELECT * FROM events WHERE calendar_id = ? AND event_id = ?",
