@@ -58,3 +58,26 @@ def test_upsert_document_preserves_fetched_at_but_bumps_updated_at_on_change(tmp
     assert second_row["fetched_at"] == first_row["fetched_at"]
     assert second_row["updated_at"] >= first_row["updated_at"]
     assert second_row["content_text"] == "Version 2"
+
+
+def test_mark_trashed_sets_flag(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(_doc())
+
+    store.mark_trashed("doc-1")
+
+    row = store._conn.execute("SELECT is_trashed FROM documents WHERE doc_id = ?", ("doc-1",)).fetchone()
+    assert row["is_trashed"] == 1
+
+
+def test_get_modified_time_returns_stored_value(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(_doc(modified_time="2024-06-01T00:00:00.000Z"))
+
+    assert store.get_modified_time("doc-1") == "2024-06-01T00:00:00.000Z"
+
+
+def test_get_modified_time_returns_none_for_unknown_doc(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+
+    assert store.get_modified_time("unknown-doc") is None

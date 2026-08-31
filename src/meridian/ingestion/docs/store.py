@@ -68,3 +68,16 @@ class DocsStore:
                     now,
                 ),
             )
+
+    def mark_trashed(self, doc_id: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "UPDATE documents SET is_trashed = 1, updated_at = ? WHERE doc_id = ?",
+                (_now(), doc_id),
+            )
+
+    def get_modified_time(self, doc_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT modified_time FROM documents WHERE doc_id = ?", (doc_id,)
+        ).fetchone()
+        return row["modified_time"] if row else None
