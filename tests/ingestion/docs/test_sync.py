@@ -12,6 +12,7 @@ from meridian.ingestion.docs.sync import (
     _fetch_and_store,
     _full_backfill,
     _incremental_sync,
+    run_sync,
 )
 
 
@@ -448,3 +449,43 @@ def test_incremental_sync_rate_limited_then_succeeds(monkeypatch, tmp_path):
 
     assert stats.sync_type == "incremental"
     assert store.get_sync_state().page_token == "token-2"
+
+
+def test_run_sync_dispatches_to_full_backfill_when_no_page_token(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    drive_service = _FakeDriveService(files_list_pages=[{"files": []}])
+    docs_service = _FakeDocsService()
+
+    stats = run_sync(drive_service, docs_service, store)
+
+    assert stats.sync_type == "full"
+    assert store.get_sync_state().page_token == "start-1"
+
+
+def test_run_sync_dispatches_to_incremental_when_page_token_stored(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.set_sync_state("token-1")
+    drive_service = _FakeDriveService(
+        changes_list_pages=[{"changes": [], "newStartPageToken": "token-2"}]
+    )
+    docs_service = _FakeDocsService()
+
+    stats = run_sync(drive_service, docs_service, store)
+
+    assert stats.sync_type == "incremental"
+    assert drive_service.changes_double.list_calls[0]["pageToken"] == "token-1"
+
+
+def test_run_sync_falls_back_to_full_resync_on_invalid_token(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.set_sync_state("stale-token")
+    drive_service = _FakeDriveService(
+        changes_list_pages=[_http_error(400)],
+        files_list_pages=[{"files": []}],
+    )
+    docs_service = _FakeDocsService()
+
+    stats = run_sync(drive_service, docs_service, store)
+
+    assert stats.sync_type == "full"
+    assert store.get_sync_state().page_token == "start-1"

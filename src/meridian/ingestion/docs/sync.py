@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 from googleapiclient.errors import HttpError
@@ -218,3 +219,70 @@ def _apply_change(
         return
 
     _fetch_and_store(docs_service, store, file_meta, stats, rate_limiter=rate_limiter, logger=logger)
+
+
+def run_sync(
+    drive_service,
+    docs_service,
+    store: DocsStore,
+    *,
+    rate_limiter: TokenBucket | None = None,
+    logger: logging.Logger | None = None,
+    drive_query: str = "",
+) -> SyncStats:
+    start = time.monotonic()
+    sync_state = store.get_sync_state()
+
+    if sync_state.page_token is None:
+        stats = _full_backfill(
+            drive_service,
+            docs_service,
+            store,
+            rate_limiter=rate_limiter,
+            logger=logger,
+            drive_query=drive_query,
+        )
+    else:
+        try:
+            stats = _incremental_sync(
+                drive_service,
+                docs_service,
+                store,
+                rate_limiter=rate_limiter,
+                logger=logger,
+                page_token=sync_state.page_token,
+            )
+        except _ChangesTokenInvalid:
+            if logger is not None:
+                logger.warning(
+                    "docs changes page token invalid/expired, falling back to full resync",
+                    extra={"operation": "docs.sync", "status": "retry", "duration_ms": 0},
+                )
+            store.clear_sync_state()
+            stats = _full_backfill(
+                drive_service,
+                docs_service,
+                store,
+                rate_limiter=rate_limiter,
+                logger=logger,
+                drive_query=drive_query,
+            )
+
+    stats.duration_ms = round((time.monotonic() - start) * 1000, 2)
+
+    if logger is not None:
+        logger.info(
+            f"docs sync complete ({stats.sync_type})",
+            extra={
+                "operation": "docs.sync",
+                "status": "success",
+                "duration_ms": stats.duration_ms,
+                "sync_type": stats.sync_type,
+                "documents_fetched": stats.documents_fetched,
+                "documents_skipped_unchanged": stats.documents_skipped_unchanged,
+                "documents_trashed": stats.documents_trashed,
+                "parse_failures": stats.parse_failures,
+            },
+        )
+
+    return stats
