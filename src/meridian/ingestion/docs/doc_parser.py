@@ -33,6 +33,17 @@ def _render_paragraph(paragraph: dict[str, Any]) -> str:
     return f"{prefix}{text}"
 
 
+def _flatten_table(table: dict[str, Any]) -> str:
+    rows = []
+    for row in table.get("tableRows", []):
+        cells = []
+        for cell in row.get("tableCells", []):
+            cell_text = _flatten_content(cell.get("content", []))
+            cells.append(cell_text.replace("\n", " ").strip())
+        rows.append(" | ".join(cells))
+    return "\n".join(rows)
+
+
 def _flatten_content(body_content: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for element in body_content:

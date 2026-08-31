@@ -1,4 +1,4 @@
-from meridian.ingestion.docs.doc_parser import _flatten_content
+from meridian.ingestion.docs.doc_parser import _flatten_content, _flatten_table
 
 
 def _text_paragraph(text: str, *, style: str | None = None, bullet: bool = False) -> dict:
@@ -47,3 +47,32 @@ def test_flatten_content_skips_empty_paragraphs():
 
 def test_flatten_content_empty_body_returns_empty_string():
     assert _flatten_content([]) == ""
+
+
+def _cell(text: str) -> dict:
+    return {"content": [_text_paragraph(text)]}
+
+
+def test_flatten_table_joins_cells_and_rows():
+    table = {
+        "tableRows": [
+            {"tableCells": [_cell("A1\n"), _cell("B1\n")]},
+            {"tableCells": [_cell("A2\n"), _cell("B2\n")]},
+        ]
+    }
+
+    assert _flatten_table(table) == "A1 | B1\nA2 | B2"
+
+
+def test_flatten_table_empty_returns_empty_string():
+    assert _flatten_table({"tableRows": []}) == ""
+
+
+def test_flatten_content_includes_table_between_paragraphs():
+    body = [
+        _text_paragraph("Before\n"),
+        {"table": {"tableRows": [{"tableCells": [_cell("X\n")]}]}},
+        _text_paragraph("After\n"),
+    ]
+
+    assert _flatten_content(body) == "Before\nX\nAfter"
