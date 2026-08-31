@@ -10,6 +10,8 @@ from typing import Iterator
 
 _CONFIGURED_LOGGERS: set[str] = set()
 
+_BASE_RECORD_ATTRS = set(logging.makeLogRecord({}).__dict__.keys())
+
 
 class _JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -19,13 +21,17 @@ class _JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "message": record.getMessage(),
         }
-        for field in ("operation", "status", "duration_ms"):
-            value = getattr(record, field, None)
-            if value is not None:
-                payload[field] = value
+        # Any field passed via logger.info(..., extra={...}) ends up as a
+        # plain attribute on the record. Copying everything not part of the
+        # standard LogRecord shape means callers can log new metrics
+        # (operation, status, duration_ms, or whatever a future phase needs)
+        # without this formatter needing to know their names in advance.
+        for key, value in record.__dict__.items():
+            if key not in _BASE_RECORD_ATTRS and key not in payload:
+                payload[key] = value
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
-        return json.dumps(payload)
+        return json.dumps(payload, default=str)
 
 
 def get_logger(name: str, log_dir: Path | None = None) -> logging.Logger:

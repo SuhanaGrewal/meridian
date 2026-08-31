@@ -21,6 +21,7 @@ def test_load_config_maps_env_vars_to_paths(tmp_path, monkeypatch):
     assert config.log_dir == log_dir.resolve()
     assert config.notes_folder == notes_dir.resolve()
     assert config.auth_dir == data_dir.resolve() / "auth"
+    assert config.ingestion_dir == data_dir.resolve() / "ingestion"
     assert config.google_client_id == "client-id"
     assert config.google_client_secret == "client-secret"
     assert config.llm_api_key == "llm-key"
@@ -47,3 +48,4 @@ def test_ensure_dirs_creates_data_log_and_auth_dirs(tmp_path, monkeypatch):
     assert data_dir.is_dir()
     assert log_dir.is_dir()
     assert (data_dir / "auth").is_dir()
+    assert (data_dir / "ingestion").is_dir()
