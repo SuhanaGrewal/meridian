@@ -1,4 +1,11 @@
-from meridian.ingestion.docs.doc_parser import _flatten_content, _flatten_table
+import pytest
+
+from meridian.ingestion.docs.doc_parser import (
+    DocParseError,
+    _flatten_content,
+    _flatten_table,
+    parse_document,
+)
 
 
 def _text_paragraph(text: str, *, style: str | None = None, bullet: bool = False) -> dict:
@@ -76,3 +83,41 @@ def test_flatten_content_includes_table_between_paragraphs():
     ]
 
     assert _flatten_content(body) == "Before\nX\nAfter"
+
+
+def test_parse_document_extracts_title_and_content():
+    raw = {
+        "documentId": "doc-1",
+        "title": "My Doc",
+        "body": {"content": [_text_paragraph("Hello\n")]},
+    }
+
+    parsed = parse_document(raw, modified_time="2024-06-01T00:00:00.000Z")
+
+    assert parsed.doc_id == "doc-1"
+    assert parsed.title == "My Doc"
+    assert parsed.content_text == "Hello"
+    assert parsed.modified_time == "2024-06-01T00:00:00.000Z"
+    assert len(parsed.content_hash) == 64
+
+
+def test_parse_document_missing_document_id_raises():
+    with pytest.raises(DocParseError):
+        parse_document({"title": "no id"}, modified_time=None)
+
+
+def test_parse_document_tolerates_missing_body():
+    parsed = parse_document({"documentId": "doc-2"}, modified_time=None)
+
+    assert parsed.title == ""
+    assert parsed.content_text == ""
+
+
+def test_parse_document_hash_changes_when_content_changes():
+    raw_one = {"documentId": "doc-3", "title": "T", "body": {"content": [_text_paragraph("A\n")]}}
+    raw_two = {"documentId": "doc-3", "title": "T", "body": {"content": [_text_paragraph("B\n")]}}
+
+    hash_one = parse_document(raw_one, modified_time=None).content_hash
+    hash_two = parse_document(raw_two, modified_time=None).content_hash
+
+    assert hash_one != hash_two

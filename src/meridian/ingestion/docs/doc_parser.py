@@ -1,6 +1,21 @@
 from __future__ import annotations
 
+import hashlib
+from dataclasses import dataclass
 from typing import Any
+
+
+class DocParseError(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class ParsedDoc:
+    doc_id: str
+    title: str
+    content_text: str
+    modified_time: str | None
+    content_hash: str
 
 _HEADING_PREFIXES = {
     "TITLE": "# ",
@@ -56,3 +71,23 @@ def _flatten_content(body_content: list[dict[str, Any]]) -> str:
             if table_text:
                 lines.append(table_text)
     return "\n".join(lines)
+
+
+def parse_document(raw_document: dict[str, Any], *, modified_time: str | None) -> ParsedDoc:
+    try:
+        doc_id = raw_document["documentId"]
+    except KeyError as exc:
+        raise DocParseError(f"missing required field: {exc}") from exc
+
+    title = raw_document.get("title", "")
+    body_content = raw_document.get("body", {}).get("content", [])
+    content_text = _flatten_content(body_content)
+    content_hash = hashlib.sha256(f"{title}\n{content_text}".encode("utf-8")).hexdigest()
+
+    return ParsedDoc(
+        doc_id=doc_id,
+        title=title,
+        content_text=content_text,
+        modified_time=modified_time,
+        content_hash=content_hash,
+    )
