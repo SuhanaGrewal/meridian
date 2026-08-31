@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from meridian.common.google_api import execute_with_retry
+from meridian.common.rate_limiter import TokenBucket
 from meridian.ingestion.calendar.event_parser import EventParseError, parse_event
 from meridian.ingestion.calendar.store import CalendarStore
 
@@ -52,3 +54,56 @@ def _store_item(
 
     store.upsert_event(parsed)
     stats.events_fetched += 1
+
+
+def _full_backfill(
+    service,
+    store: CalendarStore,
+    *,
+    calendar_id: str,
+    rate_limiter: TokenBucket | None,
+    logger: logging.Logger | None,
+    time_min: str | None,
+) -> SyncStats:
+    stats = SyncStats(sync_type="full")
+    seen_event_ids: set[str] = set()
+    sync_token: str | None = None
+
+    page_token = None
+    while True:
+        list_kwargs = dict(
+            calendarId=calendar_id,
+            singleEvents=SINGLE_EVENTS,
+            showDeleted=SHOW_DELETED,
+            maxResults=250,
+            pageToken=page_token,
+        )
+        if time_min:
+            list_kwargs["timeMin"] = time_min
+
+        response = execute_with_retry(
+            service.events().list(**list_kwargs),
+            rate_limiter=rate_limiter,
+            logger=logger,
+            operation="calendar.events_list",
+        )
+
+        for raw in response.get("items", []):
+            event_id = raw.get("id")
+            if event_id:
+                seen_event_ids.add(event_id)
+            _store_item(store, calendar_id, raw, stats, logger)
+
+        sync_token = response.get("nextSyncToken", sync_token)
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    stats.events_reconciled_deleted = store.tombstone_missing(
+        calendar_id, seen_event_ids, min_start_at=time_min
+    )
+
+    if sync_token:
+        store.set_sync_state(calendar_id, sync_token)
+
+    return stats

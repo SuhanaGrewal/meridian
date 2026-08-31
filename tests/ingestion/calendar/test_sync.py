@@ -1,6 +1,50 @@
 from meridian.ingestion.calendar.event_parser import parse_event
 from meridian.ingestion.calendar.store import CalendarStore
-from meridian.ingestion.calendar.sync import SyncStats, _store_item
+from meridian.ingestion.calendar.sync import SyncStats, _full_backfill, _store_item
+
+
+class _Request:
+    def __init__(self, result):
+        self._result = result
+
+    def execute(self):
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
+
+
+class _QueuedRequest:
+    """mimics retrying the *same* request object's .execute() across attempts."""
+
+    def __init__(self, outcomes: list):
+        self._outcomes = outcomes
+
+    def execute(self):
+        outcome = self._outcomes.pop(0) if len(self._outcomes) > 1 else self._outcomes[0]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+class _FakeEvents:
+    def __init__(self, list_pages):
+        self._list_pages = [
+            (page if isinstance(page, list) else [page]) for page in list_pages
+        ]
+        self.list_calls = []
+
+    def list(self, **kwargs):
+        self.list_calls.append(kwargs)
+        outcomes = self._list_pages.pop(0)
+        return _QueuedRequest(outcomes) if len(outcomes) > 1 else _Request(outcomes[0])
+
+
+class _FakeCalendarService:
+    def __init__(self, *, list_pages=None):
+        self.events_double = _FakeEvents(list_pages or [])
+
+    def events(self):
+        return self.events_double
 
 
 def _raw_event(event_id: str, **overrides) -> dict:
@@ -44,3 +88,89 @@ def test_store_item_dead_letters_malformed_event_without_id(tmp_path):
 
     assert stats.parse_failures == 1
     assert store.count_events() == 0
+
+
+def test_full_backfill_stores_events_and_persists_sync_token(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    service = _FakeCalendarService(
+        list_pages=[{"items": [_raw_event("evt-1"), _raw_event("evt-2")], "nextSyncToken": "token-1"}]
+    )
+
+    stats = _full_backfill(
+        service, store, calendar_id="primary", rate_limiter=None, logger=None, time_min=None
+    )
+
+    assert stats.sync_type == "full"
+    assert stats.events_fetched == 2
+    assert store.count_events() == 2
+    assert store.get_sync_state("primary").sync_token == "token-1"
+
+
+def test_full_backfill_paginates_across_multiple_pages(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    service = _FakeCalendarService(
+        list_pages=[
+            {"items": [_raw_event("evt-1")], "nextPageToken": "p2"},
+            {"items": [_raw_event("evt-2")], "nextSyncToken": "token-1"},
+        ]
+    )
+
+    stats = _full_backfill(
+        service, store, calendar_id="primary", rate_limiter=None, logger=None, time_min=None
+    )
+
+    assert stats.events_fetched == 2
+    assert store.count_events() == 2
+
+
+def test_full_backfill_passes_time_min_only_when_set(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    service = _FakeCalendarService(list_pages=[{"items": []}])
+
+    _full_backfill(
+        service,
+        store,
+        calendar_id="primary",
+        rate_limiter=None,
+        logger=None,
+        time_min="2024-01-01T00:00:00Z",
+    )
+
+    assert service.events_double.list_calls[0]["timeMin"] == "2024-01-01T00:00:00Z"
+
+
+def test_full_backfill_omits_time_min_when_unset(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    service = _FakeCalendarService(list_pages=[{"items": []}])
+
+    _full_backfill(service, store, calendar_id="primary", rate_limiter=None, logger=None, time_min=None)
+
+    assert "timeMin" not in service.events_double.list_calls[0]
+
+
+def test_full_backfill_is_idempotent_when_rerun(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    page = {"items": [_raw_event("evt-1")], "nextSyncToken": "token-1"}
+
+    service_one = _FakeCalendarService(list_pages=[dict(page)])
+    _full_backfill(service_one, store, calendar_id="primary", rate_limiter=None, logger=None, time_min=None)
+
+    service_two = _FakeCalendarService(list_pages=[dict(page)])
+    _full_backfill(service_two, store, calendar_id="primary", rate_limiter=None, logger=None, time_min=None)
+
+    assert store.count_events() == 1
+
+
+def test_full_backfill_tombstones_event_missing_from_fresh_listing(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.upsert_event(parse_event(_raw_event("evt-stale"), calendar_id="primary"))
+
+    service = _FakeCalendarService(
+        list_pages=[{"items": [_raw_event("evt-1")], "nextSyncToken": "token-1"}]
+    )
+    stats = _full_backfill(
+        service, store, calendar_id="primary", rate_limiter=None, logger=None, time_min=None
+    )
+
+    assert stats.events_reconciled_deleted == 1
+    assert store.get_event_row("primary", "evt-stale")["is_deleted"] == 1
