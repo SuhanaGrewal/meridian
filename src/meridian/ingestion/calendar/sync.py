@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from googleapiclient.errors import HttpError
+
 from meridian.common.google_api import execute_with_retry
 from meridian.common.rate_limiter import TokenBucket
 from meridian.ingestion.calendar.event_parser import EventParseError, parse_event
@@ -106,4 +108,55 @@ def _full_backfill(
     if sync_token:
         store.set_sync_state(calendar_id, sync_token)
 
+    return stats
+
+
+class _SyncTokenExpired(Exception):
+    pass
+
+
+def _incremental_sync(
+    service,
+    store: CalendarStore,
+    *,
+    calendar_id: str,
+    rate_limiter: TokenBucket | None,
+    logger: logging.Logger | None,
+    sync_token: str,
+) -> SyncStats:
+    stats = SyncStats(sync_type="incremental")
+    latest_sync_token = sync_token
+
+    page_token = None
+    while True:
+        # note: syncToken can never be combined with timeMin/timeMax/q -
+        # google returns a 400 error if you try.
+        request = service.events().list(
+            calendarId=calendar_id,
+            syncToken=sync_token,
+            singleEvents=SINGLE_EVENTS,
+            showDeleted=SHOW_DELETED,
+            pageToken=page_token,
+        )
+        try:
+            response = execute_with_retry(
+                request,
+                rate_limiter=rate_limiter,
+                logger=logger,
+                operation="calendar.events_list",
+            )
+        except HttpError as exc:
+            if getattr(exc.resp, "status", None) == 410:
+                raise _SyncTokenExpired() from exc
+            raise
+
+        for raw in response.get("items", []):
+            _store_item(store, calendar_id, raw, stats, logger)
+
+        latest_sync_token = response.get("nextSyncToken", latest_sync_token)
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    store.set_sync_state(calendar_id, latest_sync_token)
     return stats

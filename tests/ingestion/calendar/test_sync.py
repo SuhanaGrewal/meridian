@@ -1,6 +1,28 @@
+import json
+
+import httplib2
+import pytest
+from googleapiclient.errors import HttpError
+
 from meridian.ingestion.calendar.event_parser import parse_event
 from meridian.ingestion.calendar.store import CalendarStore
-from meridian.ingestion.calendar.sync import SyncStats, _full_backfill, _store_item
+from meridian.ingestion.calendar.sync import (
+    SyncStats,
+    _full_backfill,
+    _incremental_sync,
+    _store_item,
+    _SyncTokenExpired,
+)
+
+
+def _http_error(status: int, *, retry_after: str | None = None, reason: str | None = None) -> HttpError:
+    headers = {"status": str(status)}
+    if retry_after is not None:
+        headers["retry-after"] = retry_after
+    resp = httplib2.Response(headers)
+    errors = [{"reason": reason}] if reason else []
+    content = json.dumps({"error": {"errors": errors}}).encode("utf-8")
+    return HttpError(resp, content)
 
 
 class _Request:
@@ -174,3 +196,105 @@ def test_full_backfill_tombstones_event_missing_from_fresh_listing(tmp_path):
 
     assert stats.events_reconciled_deleted == 1
     assert store.get_event_row("primary", "evt-stale")["is_deleted"] == 1
+
+
+def test_incremental_sync_uses_stored_sync_token(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    service = _FakeCalendarService(
+        list_pages=[{"items": [_raw_event("evt-1")], "nextSyncToken": "token-2"}]
+    )
+
+    stats = _incremental_sync(
+        service, store, calendar_id="primary", rate_limiter=None, logger=None, sync_token="token-1"
+    )
+
+    assert stats.sync_type == "incremental"
+    assert stats.events_fetched == 1
+    assert service.events_double.list_calls[0]["syncToken"] == "token-1"
+    assert store.get_sync_state("primary").sync_token == "token-2"
+
+
+def test_incremental_sync_never_sends_time_bound_params(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    service = _FakeCalendarService(list_pages=[{"items": [], "nextSyncToken": "token-2"}])
+
+    _incremental_sync(
+        service, store, calendar_id="primary", rate_limiter=None, logger=None, sync_token="token-1"
+    )
+
+    call_kwargs = service.events_double.list_calls[0]
+    assert "timeMin" not in call_kwargs
+    assert "timeMax" not in call_kwargs
+    assert "q" not in call_kwargs
+
+
+def test_incremental_sync_paginates_across_multiple_pages(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    service = _FakeCalendarService(
+        list_pages=[
+            {"items": [_raw_event("evt-1")], "nextPageToken": "p2"},
+            {"items": [_raw_event("evt-2")], "nextSyncToken": "token-2"},
+        ]
+    )
+
+    stats = _incremental_sync(
+        service, store, calendar_id="primary", rate_limiter=None, logger=None, sync_token="token-1"
+    )
+
+    assert stats.events_fetched == 2
+    assert store.get_sync_state("primary").sync_token == "token-2"
+
+
+def test_incremental_sync_tombstones_cancelled_event(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.upsert_event(parse_event(_raw_event("evt-1"), calendar_id="primary"))
+    service = _FakeCalendarService(
+        list_pages=[
+            {"items": [{"id": "evt-1", "status": "cancelled"}], "nextSyncToken": "token-2"}
+        ]
+    )
+
+    stats = _incremental_sync(
+        service, store, calendar_id="primary", rate_limiter=None, logger=None, sync_token="token-1"
+    )
+
+    assert stats.events_deleted == 1
+    assert store.get_event_row("primary", "evt-1")["is_deleted"] == 1
+
+
+def test_incremental_sync_expired_token_raises_sync_token_expired(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    service = _FakeCalendarService(list_pages=[_http_error(410)])
+
+    with pytest.raises(_SyncTokenExpired):
+        _incremental_sync(
+            service, store, calendar_id="primary", rate_limiter=None, logger=None, sync_token="token-1"
+        )
+
+
+def test_incremental_sync_permanent_error_propagates(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    service = _FakeCalendarService(list_pages=[_http_error(403, reason="insufficientPermissions")])
+
+    with pytest.raises(HttpError):
+        _incremental_sync(
+            service, store, calendar_id="primary", rate_limiter=None, logger=None, sync_token="token-1"
+        )
+
+
+def test_incremental_sync_rate_limited_then_succeeds(monkeypatch, tmp_path):
+    monkeypatch.setattr("meridian.common.google_api.time.sleep", lambda s: None)
+    monkeypatch.setattr("meridian.common.retry.time.sleep", lambda s: None)
+
+    store = CalendarStore(tmp_path / "calendar.db")
+    service = _FakeCalendarService(
+        list_pages=[
+            [_http_error(429, retry_after="1"), {"items": [_raw_event("evt-1")], "nextSyncToken": "token-2"}]
+        ]
+    )
+
+    stats = _incremental_sync(
+        service, store, calendar_id="primary", rate_limiter=None, logger=None, sync_token="token-1"
+    )
+
+    assert stats.events_fetched == 1
