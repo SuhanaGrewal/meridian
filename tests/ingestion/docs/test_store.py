@@ -81,3 +81,33 @@ def test_get_modified_time_returns_none_for_unknown_doc(tmp_path):
     store = DocsStore(tmp_path / "docs.db")
 
     assert store.get_modified_time("unknown-doc") is None
+
+
+def test_sync_state_round_trip(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+
+    assert store.get_sync_state().page_token is None
+
+    store.set_sync_state("token-1")
+    state = store.get_sync_state()
+
+    assert state.page_token == "token-1"
+    assert state.last_synced_at is not None
+
+
+def test_set_sync_state_overwrites_previous_value(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+
+    store.set_sync_state("token-1")
+    store.set_sync_state("token-2")
+
+    assert store.get_sync_state().page_token == "token-2"
+
+
+def test_clear_sync_state_resets_to_none(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.set_sync_state("token-1")
+
+    store.clear_sync_state()
+
+    assert store.get_sync_state().page_token is None

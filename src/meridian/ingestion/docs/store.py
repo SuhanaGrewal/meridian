@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,6 +25,12 @@ CREATE TABLE IF NOT EXISTS sync_state (
     last_synced_at TEXT
 );
 """
+
+
+@dataclass(frozen=True)
+class SyncState:
+    page_token: str | None
+    last_synced_at: str | None
 
 
 def _now() -> str:
@@ -81,3 +88,28 @@ class DocsStore:
             "SELECT modified_time FROM documents WHERE doc_id = ?", (doc_id,)
         ).fetchone()
         return row["modified_time"] if row else None
+
+    def get_sync_state(self) -> SyncState:
+        row = self._conn.execute(
+            "SELECT page_token, last_synced_at FROM sync_state WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return SyncState(page_token=None, last_synced_at=None)
+        return SyncState(page_token=row["page_token"], last_synced_at=row["last_synced_at"])
+
+    def set_sync_state(self, page_token: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO sync_state (id, page_token, last_synced_at)
+                VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    page_token = excluded.page_token,
+                    last_synced_at = excluded.last_synced_at
+                """,
+                (page_token, _now()),
+            )
+
+    def clear_sync_state(self) -> None:
+        with self._conn:
+            self._conn.execute("DELETE FROM sync_state WHERE id = 1")
