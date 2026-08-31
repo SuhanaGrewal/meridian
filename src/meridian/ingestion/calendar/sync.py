@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 from googleapiclient.errors import HttpError
@@ -159,4 +160,71 @@ def _incremental_sync(
             break
 
     store.set_sync_state(calendar_id, latest_sync_token)
+    return stats
+
+
+def run_sync(
+    service,
+    store: CalendarStore,
+    *,
+    calendar_id: str = "primary",
+    rate_limiter: TokenBucket | None = None,
+    logger: logging.Logger | None = None,
+    time_min: str | None = None,
+) -> SyncStats:
+    start = time.monotonic()
+    sync_state = store.get_sync_state(calendar_id)
+
+    if sync_state.sync_token is None:
+        stats = _full_backfill(
+            service,
+            store,
+            calendar_id=calendar_id,
+            rate_limiter=rate_limiter,
+            logger=logger,
+            time_min=time_min,
+        )
+    else:
+        try:
+            stats = _incremental_sync(
+                service,
+                store,
+                calendar_id=calendar_id,
+                rate_limiter=rate_limiter,
+                logger=logger,
+                sync_token=sync_state.sync_token,
+            )
+        except _SyncTokenExpired:
+            if logger is not None:
+                logger.warning(
+                    "calendar sync token expired, falling back to full resync",
+                    extra={"operation": "calendar.sync", "status": "retry", "duration_ms": 0},
+                )
+            store.clear_sync_state(calendar_id)
+            stats = _full_backfill(
+                service,
+                store,
+                calendar_id=calendar_id,
+                rate_limiter=rate_limiter,
+                logger=logger,
+                time_min=time_min,
+            )
+
+    stats.duration_ms = round((time.monotonic() - start) * 1000, 2)
+
+    if logger is not None:
+        logger.info(
+            f"calendar sync complete ({stats.sync_type})",
+            extra={
+                "operation": "calendar.sync",
+                "status": "success",
+                "duration_ms": stats.duration_ms,
+                "sync_type": stats.sync_type,
+                "events_fetched": stats.events_fetched,
+                "events_deleted": stats.events_deleted,
+                "events_reconciled_deleted": stats.events_reconciled_deleted,
+                "parse_failures": stats.parse_failures,
+            },
+        )
+
     return stats

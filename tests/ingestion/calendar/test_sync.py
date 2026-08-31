@@ -12,6 +12,7 @@ from meridian.ingestion.calendar.sync import (
     _incremental_sync,
     _store_item,
     _SyncTokenExpired,
+    run_sync,
 )
 
 
@@ -298,3 +299,44 @@ def test_incremental_sync_rate_limited_then_succeeds(monkeypatch, tmp_path):
     )
 
     assert stats.events_fetched == 1
+
+
+def test_run_sync_dispatches_to_full_backfill_when_no_sync_token(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    service = _FakeCalendarService(
+        list_pages=[{"items": [_raw_event("evt-1")], "nextSyncToken": "token-1"}]
+    )
+
+    stats = run_sync(service, store, calendar_id="primary")
+
+    assert stats.sync_type == "full"
+    assert store.get_sync_state("primary").sync_token == "token-1"
+
+
+def test_run_sync_dispatches_to_incremental_when_sync_token_stored(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.set_sync_state("primary", "token-1")
+    service = _FakeCalendarService(
+        list_pages=[{"items": [_raw_event("evt-1")], "nextSyncToken": "token-2"}]
+    )
+
+    stats = run_sync(service, store, calendar_id="primary")
+
+    assert stats.sync_type == "incremental"
+    assert service.events_double.list_calls[0]["syncToken"] == "token-1"
+
+
+def test_run_sync_falls_back_to_full_resync_on_expired_token(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.set_sync_state("primary", "stale-token")
+    service = _FakeCalendarService(
+        list_pages=[
+            _http_error(410),
+            {"items": [_raw_event("evt-1")], "nextSyncToken": "token-new"},
+        ]
+    )
+
+    stats = run_sync(service, store, calendar_id="primary")
+
+    assert stats.sync_type == "full"
+    assert store.get_sync_state("primary").sync_token == "token-new"
