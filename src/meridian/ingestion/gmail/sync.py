@@ -165,7 +165,7 @@ def _fetch_and_store(service, store, message_id: str, stats: SyncStats, *, rate_
         )
     except HttpError as exc:
         if getattr(exc.resp, "status", None) == 404:
-            # Message was deleted between the history event and our fetch —
+            # message was deleted between the history event and our fetch —
             # a benign race, not a parse failure.
             store.mark_deleted(message_id)
             stats.messages_deleted += 1

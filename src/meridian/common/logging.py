@@ -21,8 +21,8 @@ class _JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "message": record.getMessage(),
         }
-        # Any field passed via logger.info(..., extra={...}) ends up as a
-        # plain attribute on the record. Copying everything not part of the
+        # any field passed via logger.info(..., extra={...}) ends up as a
+        # plain attribute on the record. copying everything not part of the
         # standard LogRecord shape means callers can log new metrics
         # (operation, status, duration_ms, or whatever a future phase needs)
         # without this formatter needing to know their names in advance.

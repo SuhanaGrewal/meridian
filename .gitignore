@@ -1,4 +1,4 @@
-# Python
+# python
 __pycache__/
 *.pyc
 .venv/
@@ -7,19 +7,19 @@ venv/
 build/
 dist/
 
-# Environment / secrets
+# environment / secrets
 .env
 *.token.json
 credentials.json
 token.json
 
-# Local data (index, raw ingested content, embeddings)
+# local data (index, raw ingested content, embeddings)
 data/*
 !data/.gitkeep
 logs/*
 !logs/.gitkeep
 
-# Editor/OS
+# editor/os
 .DS_Store
 .vscode/
 .idea/
