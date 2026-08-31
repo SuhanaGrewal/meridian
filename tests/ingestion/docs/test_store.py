@@ -111,3 +111,33 @@ def test_clear_sync_state_resets_to_none(tmp_path):
     store.clear_sync_state()
 
     assert store.get_sync_state().page_token is None
+
+
+def test_tombstone_missing_marks_local_docs_not_seen(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(_doc(doc_id="doc-1"))
+    store.upsert_document(_doc(doc_id="doc-2"))
+
+    tombstoned = store.tombstone_missing({"doc-1"})
+
+    assert tombstoned == 1
+    assert store.get_document_row("doc-1")["is_trashed"] == 0
+    assert store.get_document_row("doc-2")["is_trashed"] == 1
+
+
+def test_tombstone_missing_ignores_already_trashed_docs(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(_doc(doc_id="doc-1"))
+    store.mark_trashed("doc-1")
+
+    tombstoned = store.tombstone_missing(set())
+
+    assert tombstoned == 0
+
+
+def test_count_documents(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(_doc(doc_id="doc-1"))
+    store.upsert_document(_doc(doc_id="doc-2"))
+
+    assert store.count_documents() == 2

@@ -113,3 +113,21 @@ class DocsStore:
     def clear_sync_state(self) -> None:
         with self._conn:
             self._conn.execute("DELETE FROM sync_state WHERE id = 1")
+
+    def list_doc_ids(self) -> set[str]:
+        rows = self._conn.execute("SELECT doc_id FROM documents WHERE is_trashed = 0")
+        return {row["doc_id"] for row in rows.fetchall()}
+
+    def tombstone_missing(self, seen_doc_ids: set[str]) -> int:
+        missing = self.list_doc_ids() - set(seen_doc_ids)
+        for doc_id in missing:
+            self.mark_trashed(doc_id)
+        return len(missing)
+
+    def get_document_row(self, doc_id: str) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM documents WHERE doc_id = ?", (doc_id,)
+        ).fetchone()
+
+    def count_documents(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
