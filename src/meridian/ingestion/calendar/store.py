@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +36,12 @@ CREATE TABLE IF NOT EXISTS sync_state (
     last_synced_at TEXT
 );
 """
+
+
+@dataclass(frozen=True)
+class SyncState:
+    sync_token: str | None
+    last_synced_at: str | None
 
 
 def _now() -> str:
@@ -130,6 +137,32 @@ class CalendarStore:
         for event_id in missing:
             self.mark_deleted(calendar_id, event_id)
         return len(missing)
+
+    def get_sync_state(self, calendar_id: str) -> SyncState:
+        row = self._conn.execute(
+            "SELECT sync_token, last_synced_at FROM sync_state WHERE calendar_id = ?",
+            (calendar_id,),
+        ).fetchone()
+        if row is None:
+            return SyncState(sync_token=None, last_synced_at=None)
+        return SyncState(sync_token=row["sync_token"], last_synced_at=row["last_synced_at"])
+
+    def set_sync_state(self, calendar_id: str, sync_token: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO sync_state (calendar_id, sync_token, last_synced_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(calendar_id) DO UPDATE SET
+                    sync_token = excluded.sync_token,
+                    last_synced_at = excluded.last_synced_at
+                """,
+                (calendar_id, sync_token, _now()),
+            )
+
+    def clear_sync_state(self, calendar_id: str) -> None:
+        with self._conn:
+            self._conn.execute("DELETE FROM sync_state WHERE calendar_id = ?", (calendar_id,))
 
     def get_event_row(self, calendar_id: str, event_id: str) -> sqlite3.Row | None:
         return self._conn.execute(

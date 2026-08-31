@@ -123,3 +123,34 @@ def test_tombstone_missing_with_no_scope_covers_all_local_events(tmp_path):
 
     assert tombstoned == 1
     assert store.get_event_row("primary", "evt-old")["is_deleted"] == 1
+
+
+def test_sync_state_round_trip_per_calendar(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+
+    assert store.get_sync_state("primary").sync_token is None
+
+    store.set_sync_state("primary", "token-1")
+    state = store.get_sync_state("primary")
+
+    assert state.sync_token == "token-1"
+    assert state.last_synced_at is not None
+    assert store.get_sync_state("other-calendar").sync_token is None
+
+
+def test_set_sync_state_overwrites_previous_value(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+
+    store.set_sync_state("primary", "token-1")
+    store.set_sync_state("primary", "token-2")
+
+    assert store.get_sync_state("primary").sync_token == "token-2"
+
+
+def test_clear_sync_state_resets_to_none(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.set_sync_state("primary", "token-1")
+
+    store.clear_sync_state("primary")
+
+    assert store.get_sync_state("primary").sync_token is None
