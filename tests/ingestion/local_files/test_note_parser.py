@@ -1,6 +1,14 @@
+import hashlib
 from pathlib import Path
 
-from meridian.ingestion.local_files.note_parser import ParsedNote, _read_file_bytes
+import pytest
+
+from meridian.ingestion.local_files.note_parser import (
+    NoteParseError,
+    ParsedNote,
+    _read_file_bytes,
+    parse_note_file,
+)
 
 
 def test_parsed_note_holds_expected_fields():
@@ -44,3 +52,28 @@ def test_read_file_bytes_retries_transient_oserror_then_succeeds(tmp_path, monke
 
     assert _read_file_bytes(path) == b"hello world"
     assert calls["count"] == 2
+
+
+def test_parse_note_file_extracts_content_and_metadata(tmp_path):
+    notes_folder = tmp_path / "notes"
+    (notes_folder / "sub").mkdir(parents=True)
+    file_path = notes_folder / "sub" / "note.txt"
+    file_path.write_text("hello world", encoding="utf-8")
+
+    parsed = parse_note_file(file_path, relative_to=notes_folder)
+
+    assert parsed.path == "sub/note.txt"
+    assert parsed.content_text == "hello world"
+    assert parsed.content_hash == hashlib.sha256(b"hello world").hexdigest()
+    assert parsed.size_bytes == len(b"hello world")
+    assert parsed.mtime_ns > 0
+
+
+def test_parse_note_file_invalid_utf8_raises_note_parse_error(tmp_path):
+    notes_folder = tmp_path / "notes"
+    notes_folder.mkdir()
+    file_path = notes_folder / "bad.txt"
+    file_path.write_bytes(b"\xff\xfe not valid utf-8")
+
+    with pytest.raises(NoteParseError):
+        parse_note_file(file_path, relative_to=notes_folder)
