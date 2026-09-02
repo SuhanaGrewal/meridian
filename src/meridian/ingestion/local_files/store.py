@@ -69,3 +69,11 @@ class NotesStore:
                     now,
                 ),
             )
+
+    def get_note_metadata(self, path: str) -> tuple[int, int] | None:
+        row = self._conn.execute(
+            "SELECT size_bytes, mtime_ns FROM notes WHERE path = ? AND is_deleted = 0", (path,)
+        ).fetchone()
+        if row is None:
+            return None
+        return row["size_bytes"], row["mtime_ns"]

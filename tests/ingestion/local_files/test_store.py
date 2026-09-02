@@ -59,3 +59,16 @@ def test_upsert_note_preserves_fetched_at_but_bumps_updated_at_on_change(tmp_pat
     assert second_row["fetched_at"] == first_row["fetched_at"]
     assert second_row["updated_at"] >= first_row["updated_at"]
     assert second_row["content_text"] == "v2"
+
+
+def test_get_note_metadata_returns_size_and_mtime(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+    store.upsert_note(_note(size_bytes=42, mtime_ns=999))
+
+    assert store.get_note_metadata("note.txt") == (42, 999)
+
+
+def test_get_note_metadata_returns_none_for_unknown_path(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+
+    assert store.get_note_metadata("unknown.txt") is None
