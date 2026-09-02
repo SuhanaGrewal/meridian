@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -71,3 +72,56 @@ def _scan_one_file(
         stats.notes_added += 1
     else:
         stats.notes_updated += 1
+
+
+def run_scan(
+    notes_folder: Path | None,
+    store: NotesStore,
+    *,
+    extensions: set[str] = DEFAULT_EXTENSIONS,
+    force_rehash: bool = False,
+    logger: logging.Logger | None = None,
+) -> ScanStats:
+    start = time.monotonic()
+    stats = ScanStats()
+
+    if notes_folder is None or not notes_folder.is_dir():
+        if logger is not None:
+            logger.warning(
+                f"notes folder not configured or does not exist: {notes_folder}",
+                extra={"operation": "local_files.scan", "status": "error", "duration_ms": 0},
+            )
+        return stats
+
+    seen_paths: set[str] = set()
+    for path in _iter_note_files(notes_folder, extensions):
+        seen_paths.add(path.relative_to(notes_folder).as_posix())
+        _scan_one_file(
+            path,
+            notes_folder=notes_folder,
+            store=store,
+            stats=stats,
+            logger=logger,
+            force_rehash=force_rehash,
+        )
+
+    stats.notes_deleted = store.tombstone_missing(seen_paths)
+    stats.duration_ms = round((time.monotonic() - start) * 1000, 2)
+
+    if logger is not None:
+        logger.info(
+            "local files scan complete",
+            extra={
+                "operation": "local_files.scan",
+                "status": "success",
+                "duration_ms": stats.duration_ms,
+                "files_scanned": stats.files_scanned,
+                "notes_added": stats.notes_added,
+                "notes_updated": stats.notes_updated,
+                "notes_skipped_unchanged": stats.notes_skipped_unchanged,
+                "notes_deleted": stats.notes_deleted,
+                "parse_failures": stats.parse_failures,
+            },
+        )
+
+    return stats

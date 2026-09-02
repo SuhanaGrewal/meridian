@@ -3,6 +3,7 @@ from meridian.ingestion.local_files.scan import (
     ScanStats,
     _iter_note_files,
     _scan_one_file,
+    run_scan,
 )
 from meridian.ingestion.local_files.store import NotesStore
 
@@ -141,3 +142,57 @@ def test_scan_one_file_dead_letters_invalid_utf8_without_raising(tmp_path):
     assert store.count_notes() == 0
     dead_letters = store._conn.execute("SELECT path FROM dead_letters").fetchall()
     assert len(dead_letters) == 1
+
+
+def test_run_scan_with_none_folder_returns_empty_stats(tmp_path):
+    _, store = _setup(tmp_path)
+
+    stats = run_scan(None, store)
+
+    assert stats == ScanStats()
+
+
+def test_run_scan_with_nonexistent_folder_returns_empty_stats(tmp_path):
+    _, store = _setup(tmp_path)
+
+    stats = run_scan(tmp_path / "does-not-exist", store)
+
+    assert stats == ScanStats()
+
+
+def test_run_scan_ingests_all_matching_files(tmp_path):
+    notes_folder, store = _setup(tmp_path)
+    (notes_folder / "a.txt").write_text("a")
+    (notes_folder / "b.md").write_text("b")
+    (notes_folder / "c.png").write_bytes(b"skip me")
+
+    stats = run_scan(notes_folder, store)
+
+    assert stats.notes_added == 2
+    assert stats.files_scanned == 2
+    assert store.count_notes() == 2
+
+
+def test_run_scan_is_idempotent_when_rerun_unchanged(tmp_path):
+    notes_folder, store = _setup(tmp_path)
+    (notes_folder / "a.txt").write_text("a")
+
+    run_scan(notes_folder, store)
+    stats = run_scan(notes_folder, store)
+
+    assert stats.notes_skipped_unchanged == 1
+    assert stats.notes_added == 0
+    assert store.count_notes() == 1
+
+
+def test_run_scan_tombstones_file_deleted_from_disk(tmp_path):
+    notes_folder, store = _setup(tmp_path)
+    file_path = notes_folder / "a.txt"
+    file_path.write_text("a")
+    run_scan(notes_folder, store)
+
+    file_path.unlink()
+    stats = run_scan(notes_folder, store)
+
+    assert stats.notes_deleted == 1
+    assert store.get_note_row("a.txt")["is_deleted"] == 1
