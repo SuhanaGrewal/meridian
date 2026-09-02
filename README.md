@@ -28,7 +28,7 @@ src/meridian/
     gmail/          Phase 2 — Gmail polling + History API incremental sync
     calendar/       Phase 3 — Calendar polling + sync tokens
     docs/           Phase 4 — Docs polling + revision tracking
-    local_files/    Phase 5 — notes/transcripts folder watcher, content-hash dedup
+    local_files/    Phase 5 — notes/transcripts folder scanner, content-hash dedup
   redaction/        Phase 6 — PII scrubbing before anything leaves the machine
   indexing/         Phase 7 — structure-aware chunking, embeddings, hybrid search
   query/            Phase 8 — retrieval, rerank, grounded generation with citations
@@ -46,9 +46,9 @@ tests/              eval harness & unit tests (Phase 12+)
 ## Status
 
 Phase 1 (Google OAuth), Phase 2 (Gmail ingestion), Phase 3 (Calendar
-ingestion), and Phase 4 (Docs ingestion) are implemented. Phases are built
-and confirmed one at a time; see `CLAUDE.md` in this repo for the working
-agreement.
+ingestion), Phase 4 (Docs ingestion), and Phase 5 (local files ingestion)
+are implemented. Phases are built and confirmed one at a time; see
+`CLAUDE.md` in this repo for the working agreement.
 
 ## Setup
 
@@ -149,4 +149,28 @@ Inspect what got stored:
 
 ```
 sqlite3 data/ingestion/docs/docs.db "select count(*) from documents;"
+```
+
+### Phase 5 (Local files ingestion)
+
+No Google auth needed — just set `MERIDIAN_NOTES_FOLDER` in `.env`, then run:
+
+```
+python -m meridian.ingestion.local_files
+```
+
+Unlike Phases 2-4, this isn't a backfill/incremental-sync split — listing a
+local folder is free, so every run scans the whole folder (recursing into
+subfolders, `.txt`/`.md` files only, dotfiles/dot-directories skipped).
+Before re-reading a file's content, it first checks the file's size and
+modified-time against what's stored and skips entirely if neither changed
+— so re-running on an untouched folder does no real work. A file removed
+from the folder is tombstoned every run. Pass `--force-rehash` to bypass
+that check and re-read every file's content regardless. Stores everything
+in `data/ingestion/local_files/local_files.db`.
+
+Inspect what got stored:
+
+```
+sqlite3 data/ingestion/local_files/local_files.db "select count(*) from notes;"
 ```
