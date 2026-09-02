@@ -101,3 +101,9 @@ class NotesStore:
         for path in missing:
             self.mark_deleted(path)
         return len(missing)
+
+    def get_note_row(self, path: str) -> sqlite3.Row | None:
+        return self._conn.execute("SELECT * FROM notes WHERE path = ?", (path,)).fetchone()
+
+    def count_notes(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]

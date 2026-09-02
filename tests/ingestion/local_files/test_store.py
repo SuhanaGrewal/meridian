@@ -124,3 +124,19 @@ def test_tombstone_missing_marks_local_notes_not_seen(tmp_path):
 
     assert tombstoned == 1
     assert store.list_paths() == {"a.txt"}
+
+
+def test_get_note_row_returns_row(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+    store.upsert_note(_note())
+
+    assert store.get_note_row("note.txt")["content_text"] == "hello"
+    assert store.get_note_row("unknown.txt") is None
+
+
+def test_count_notes(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+    store.upsert_note(_note(path="a.txt"))
+    store.upsert_note(_note(path="b.txt"))
+
+    assert store.count_notes() == 2
