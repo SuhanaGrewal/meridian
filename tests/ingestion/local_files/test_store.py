@@ -104,3 +104,23 @@ def test_record_dead_letter_does_not_touch_notes_table(tmp_path):
     assert len(dead_letters) == 1
     assert dead_letters[0]["path"] == "broken.txt"
     assert dead_letters[0]["error"] == "boom"
+
+
+def test_list_paths_excludes_deleted(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+    store.upsert_note(_note(path="a.txt"))
+    store.upsert_note(_note(path="b.txt"))
+    store.mark_deleted("b.txt")
+
+    assert store.list_paths() == {"a.txt"}
+
+
+def test_tombstone_missing_marks_local_notes_not_seen(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+    store.upsert_note(_note(path="a.txt"))
+    store.upsert_note(_note(path="b.txt"))
+
+    tombstoned = store.tombstone_missing({"a.txt"})
+
+    assert tombstoned == 1
+    assert store.list_paths() == {"a.txt"}

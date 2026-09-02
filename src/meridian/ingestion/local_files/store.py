@@ -91,3 +91,13 @@ class NotesStore:
                 "INSERT INTO dead_letters (path, error, occurred_at) VALUES (?, ?, ?)",
                 (path, error, _now()),
             )
+
+    def list_paths(self) -> set[str]:
+        rows = self._conn.execute("SELECT path FROM notes WHERE is_deleted = 0")
+        return {row["path"] for row in rows.fetchall()}
+
+    def tombstone_missing(self, seen_paths: set[str]) -> int:
+        missing = self.list_paths() - set(seen_paths)
+        for path in missing:
+            self.mark_deleted(path)
+        return len(missing)
