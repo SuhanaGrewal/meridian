@@ -77,3 +77,17 @@ class NotesStore:
         if row is None:
             return None
         return row["size_bytes"], row["mtime_ns"]
+
+    def mark_deleted(self, path: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "UPDATE notes SET is_deleted = 1, updated_at = ? WHERE path = ?",
+                (_now(), path),
+            )
+
+    def record_dead_letter(self, path: str, error: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO dead_letters (path, error, occurred_at) VALUES (?, ?, ?)",
+                (path, error, _now()),
+            )

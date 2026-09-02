@@ -72,3 +72,35 @@ def test_get_note_metadata_returns_none_for_unknown_path(tmp_path):
     store = NotesStore(tmp_path / "local_files.db")
 
     assert store.get_note_metadata("unknown.txt") is None
+
+
+def test_mark_deleted_sets_tombstone_flag(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+    store.upsert_note(_note())
+
+    store.mark_deleted("note.txt")
+
+    row = store._conn.execute("SELECT is_deleted FROM notes WHERE path = ?", ("note.txt",)).fetchone()
+    assert row["is_deleted"] == 1
+
+
+def test_mark_deleted_excludes_from_get_note_metadata(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+    store.upsert_note(_note())
+
+    store.mark_deleted("note.txt")
+
+    assert store.get_note_metadata("note.txt") is None
+
+
+def test_record_dead_letter_does_not_touch_notes_table(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+
+    store.record_dead_letter("broken.txt", "boom")
+
+    count = store._conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+    assert count == 0
+    dead_letters = store._conn.execute("SELECT path, error FROM dead_letters").fetchall()
+    assert len(dead_letters) == 1
+    assert dead_letters[0]["path"] == "broken.txt"
+    assert dead_letters[0]["error"] == "boom"
