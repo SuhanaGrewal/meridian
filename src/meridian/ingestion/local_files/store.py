@@ -4,6 +4,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from meridian.ingestion.local_files.note_parser import ParsedNote
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS notes (
     path         TEXT PRIMARY KEY,
@@ -39,3 +41,31 @@ class NotesStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def upsert_note(self, note: ParsedNote) -> None:
+        now = _now()
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO notes (
+                    path, content_text, content_hash, size_bytes, mtime_ns,
+                    is_deleted, fetched_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    content_text = excluded.content_text,
+                    content_hash = excluded.content_hash,
+                    size_bytes = excluded.size_bytes,
+                    mtime_ns = excluded.mtime_ns,
+                    is_deleted = 0,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    note.path,
+                    note.content_text,
+                    note.content_hash,
+                    note.size_bytes,
+                    note.mtime_ns,
+                    now,
+                    now,
+                ),
+            )
