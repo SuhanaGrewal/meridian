@@ -1,4 +1,10 @@
-from meridian.ingestion.local_files.scan import DEFAULT_EXTENSIONS, ScanStats, _iter_note_files
+from meridian.ingestion.local_files.scan import (
+    DEFAULT_EXTENSIONS,
+    ScanStats,
+    _iter_note_files,
+    _scan_one_file,
+)
+from meridian.ingestion.local_files.store import NotesStore
 
 
 def test_scan_stats_defaults_to_zero():
@@ -55,3 +61,83 @@ def test_iter_note_files_returns_sorted_results(tmp_path):
     found = [p.name for p in _iter_note_files(tmp_path, DEFAULT_EXTENSIONS)]
 
     assert found == ["a.txt", "b.txt"]
+
+
+def _setup(tmp_path):
+    notes_folder = tmp_path / "notes"
+    notes_folder.mkdir()
+    db_path = tmp_path / "local_files.db"
+    return notes_folder, NotesStore(db_path)
+
+
+def test_scan_one_file_adds_new_file(tmp_path):
+    notes_folder, store = _setup(tmp_path)
+    file_path = notes_folder / "note.txt"
+    file_path.write_text("hello")
+    stats = ScanStats()
+
+    _scan_one_file(file_path, notes_folder=notes_folder, store=store, stats=stats)
+
+    assert stats.notes_added == 1
+    assert stats.files_scanned == 1
+    assert store.count_notes() == 1
+
+
+def test_scan_one_file_skips_unchanged_file_without_rereading(tmp_path):
+    notes_folder, store = _setup(tmp_path)
+    file_path = notes_folder / "note.txt"
+    file_path.write_text("hello")
+    stats = ScanStats()
+    _scan_one_file(file_path, notes_folder=notes_folder, store=store, stats=stats)
+    first_row = store.get_note_row("note.txt")
+
+    second_stats = ScanStats()
+    _scan_one_file(file_path, notes_folder=notes_folder, store=store, stats=second_stats)
+    second_row = store.get_note_row("note.txt")
+
+    assert second_stats.notes_skipped_unchanged == 1
+    assert second_stats.notes_added == 0
+    assert second_row["updated_at"] == first_row["updated_at"]
+
+
+def test_scan_one_file_updates_changed_file(tmp_path):
+    notes_folder, store = _setup(tmp_path)
+    file_path = notes_folder / "note.txt"
+    file_path.write_text("v1")
+    _scan_one_file(file_path, notes_folder=notes_folder, store=store, stats=ScanStats())
+
+    file_path.write_text("v2 - longer content")
+    stats = ScanStats()
+    _scan_one_file(file_path, notes_folder=notes_folder, store=store, stats=stats)
+
+    assert stats.notes_updated == 1
+    assert store.get_note_row("note.txt")["content_text"] == "v2 - longer content"
+
+
+def test_scan_one_file_force_rehash_rereads_unchanged_file(tmp_path):
+    notes_folder, store = _setup(tmp_path)
+    file_path = notes_folder / "note.txt"
+    file_path.write_text("hello")
+    _scan_one_file(file_path, notes_folder=notes_folder, store=store, stats=ScanStats())
+
+    stats = ScanStats()
+    _scan_one_file(
+        file_path, notes_folder=notes_folder, store=store, stats=stats, force_rehash=True
+    )
+
+    assert stats.notes_skipped_unchanged == 0
+    assert stats.notes_updated == 1
+
+
+def test_scan_one_file_dead_letters_invalid_utf8_without_raising(tmp_path):
+    notes_folder, store = _setup(tmp_path)
+    file_path = notes_folder / "note.txt"
+    file_path.write_bytes(b"\xff\xfe not valid utf-8")
+    stats = ScanStats()
+
+    _scan_one_file(file_path, notes_folder=notes_folder, store=store, stats=stats)
+
+    assert stats.parse_failures == 1
+    assert store.count_notes() == 0
+    dead_letters = store._conn.execute("SELECT path FROM dead_letters").fetchall()
+    assert len(dead_letters) == 1
