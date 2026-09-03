@@ -91,3 +91,16 @@ def tokenize_for_external_call(
         )
 
     return TokenizationResult(tokenized_text=tokenized, mapping=mapping, entity_counts=entity_counts)
+
+
+def untokenize(text: str, mapping: dict[str, str]) -> str:
+    """substitutes placeholders back to their real values.
+
+    call this once on an external response, before it's returned or saved
+    anywhere, then let the mapping go out of scope - it should never be
+    persisted. a hard-secret marker ("[REDACTED]") has no mapping entry by
+    design and is never restored.
+    """
+    for placeholder, original_value in mapping.items():
+        text = text.replace(placeholder, original_value)
+    return text

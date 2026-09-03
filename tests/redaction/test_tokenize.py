@@ -4,6 +4,7 @@ from meridian.redaction.tokenize import (
     _merge_spans,
     _spans_overlap,
     tokenize_for_external_call,
+    untokenize,
 )
 
 
@@ -133,3 +134,41 @@ def test_tokenize_logs_entity_counts_without_raw_values():
 
     assert logged["extra"]["entity_counts"] == {"PERSON": 1}
     assert "John" not in str(logged["extra"])
+
+
+def test_untokenize_restores_reversible_values():
+    tokenized = "Hi <PERSON_1>, nice to meet you"
+
+    restored = untokenize(tokenized, {"<PERSON_1>": "John"})
+
+    assert restored == "Hi John, nice to meet you"
+
+
+def test_untokenize_round_trips_with_tokenize_for_reversible_only_text():
+    text = "John met Mary at the office"
+    analyzer = _FakeAnalyzer(
+        [
+            Span(entity_type="PERSON", start=0, end=4),
+            Span(entity_type="PERSON", start=9, end=13),
+        ]
+    )
+
+    result = tokenize_for_external_call(text, analyzer=analyzer)
+    restored = untokenize(result.tokenized_text, result.mapping)
+
+    assert restored == text
+
+
+def test_untokenize_cannot_restore_a_hard_secret():
+    text = "card: 4111111111111111"
+    analyzer = _FakeAnalyzer([Span(entity_type="CREDIT_CARD", start=6, end=22)])
+
+    result = tokenize_for_external_call(text, analyzer=analyzer)
+    restored = untokenize(result.tokenized_text, result.mapping)
+
+    assert restored == "card: [REDACTED]"
+    assert "4111111111111111" not in restored
+
+
+def test_untokenize_with_empty_mapping_returns_text_unchanged():
+    assert untokenize("no placeholders here", {}) == "no placeholders here"
