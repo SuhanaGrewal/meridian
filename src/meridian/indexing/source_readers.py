@@ -87,3 +87,36 @@ def read_calendar_items(db_path: Path) -> list[SourceItem]:
             )
         )
     return items
+
+
+def read_docs_items(db_path: Path) -> list[SourceItem]:
+    conn = _readonly_connection(db_path)
+    if conn is None:
+        return []
+
+    try:
+        rows = conn.execute(
+            "SELECT doc_id, title, content_text, content_hash FROM documents WHERE is_trashed = 0"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    items = []
+    for row in rows:
+        title = row["title"] or ""
+        content = row["content_text"] or ""
+        # the title is prepended as its own heading line so it becomes the
+        # doc's first section - titles are often the single most relevant
+        # piece of text for search, worth including even though the
+        # original design only mentioned content_text.
+        text = f"# {title}\n\n{content}".strip() if title else content.strip()
+        items.append(
+            SourceItem(
+                item_id=row["doc_id"],
+                text=text,
+                has_headings=True,
+                change_signal=row["content_hash"],
+                metadata={"title": title},
+            )
+        )
+    return items

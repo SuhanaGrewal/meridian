@@ -1,8 +1,20 @@
-from meridian.indexing.source_readers import read_calendar_items, read_gmail_items
+from meridian.indexing.source_readers import read_calendar_items, read_docs_items, read_gmail_items
 from meridian.ingestion.calendar.event_parser import ParsedEvent
 from meridian.ingestion.calendar.store import CalendarStore
+from meridian.ingestion.docs.doc_parser import ParsedDoc
+from meridian.ingestion.docs.store import DocsStore
 from meridian.ingestion.gmail.message_parser import ParsedMessage
 from meridian.ingestion.gmail.store import GmailStore
+
+
+def _doc(doc_id="doc-1", title="My Doc", content_text="## Section\nBody text.") -> ParsedDoc:
+    return ParsedDoc(
+        doc_id=doc_id,
+        title=title,
+        content_text=content_text,
+        modified_time="2024-06-01T00:00:00.000Z",
+        content_hash="hash-1",
+    )
 
 
 def _calendar_event(
@@ -134,3 +146,42 @@ def test_read_calendar_items_distinguishes_same_event_id_across_calendars(tmp_pa
     items = read_calendar_items(tmp_path / "calendar.db")
 
     assert {item.item_id for item in items} == {"primary:evt-1", "shared:evt-1"}
+
+
+def test_read_docs_items_prepends_title_as_heading(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(_doc())
+
+    items = read_docs_items(tmp_path / "docs.db")
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.item_id == "doc-1"
+    assert item.text == "# My Doc\n\n## Section\nBody text."
+    assert item.has_headings is True
+    assert item.change_signal == "hash-1"
+    assert item.metadata["title"] == "My Doc"
+
+
+def test_read_docs_items_handles_missing_title(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(_doc(title=""))
+
+    items = read_docs_items(tmp_path / "docs.db")
+
+    assert items[0].text == "## Section\nBody text."
+
+
+def test_read_docs_items_excludes_trashed_docs(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(_doc(doc_id="doc-1"))
+    store.upsert_document(_doc(doc_id="doc-2"))
+    store.mark_trashed("doc-2")
+
+    items = read_docs_items(tmp_path / "docs.db")
+
+    assert {item.item_id for item in items} == {"doc-1"}
+
+
+def test_read_docs_items_handles_missing_db_file(tmp_path):
+    assert read_docs_items(tmp_path / "does-not-exist.db") == []
