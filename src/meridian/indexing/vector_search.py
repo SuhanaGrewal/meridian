@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from meridian.indexing.store import IndexStore
+
 
 def cosine_similarity_top_k(
     query_embedding: np.ndarray, embeddings: np.ndarray, *, k: int
@@ -29,3 +31,20 @@ def cosine_similarity_top_k(
     top_indices = top_indices[np.argsort(-scores[top_indices])]
 
     return [(int(i), float(scores[i])) for i in top_indices]
+
+
+def search(
+    store: IndexStore, query_embedding: np.ndarray, *, k: int = 5, source: str | None = None
+) -> list[tuple[str, float]]:
+    """brute-force cosine similarity search over stored chunk embeddings,
+    optionally restricted to one source. returns (chunk_id, score) pairs,
+    most similar first."""
+    rows = store.get_chunks_with_embeddings(source)
+    if not rows:
+        return []
+
+    chunk_ids = [row["chunk_id"] for row in rows]
+    embeddings = np.stack([np.frombuffer(row["embedding"], dtype=np.float32) for row in rows])
+
+    top = cosine_similarity_top_k(np.asarray(query_embedding, dtype=np.float32), embeddings, k=k)
+    return [(chunk_ids[i], score) for i, score in top]
