@@ -54,3 +54,36 @@ def read_gmail_items(db_path: Path) -> list[SourceItem]:
             )
         )
     return items
+
+
+def read_calendar_items(db_path: Path) -> list[SourceItem]:
+    conn = _readonly_connection(db_path)
+    if conn is None:
+        return []
+
+    try:
+        rows = conn.execute(
+            "SELECT calendar_id, event_id, summary, description, location, "
+            "start_at, source_updated_at FROM events WHERE is_deleted = 0"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    items = []
+    for row in rows:
+        fields = [row["summary"], row["description"], row["location"]]
+        text = "\n".join(f for f in fields if f).strip()
+        items.append(
+            SourceItem(
+                item_id=f"{row['calendar_id']}:{row['event_id']}",
+                text=text,
+                has_headings=False,
+                change_signal=row["source_updated_at"] or "",
+                metadata={
+                    "summary": row["summary"] or "",
+                    "start_at": row["start_at"] or "",
+                    "calendar_id": row["calendar_id"],
+                },
+            )
+        )
+    return items
