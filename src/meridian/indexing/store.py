@@ -53,6 +53,12 @@ class IndexStore:
     def close(self) -> None:
         self._conn.close()
 
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """exposes the underlying connection for keyword_search's raw FTS5
+        queries, rather than having callers reach into a private attribute."""
+        return self._conn
+
     def _delete_chunks_for_item(self, source: str, source_item_id: str) -> None:
         rowids = [
             row["rowid"]
