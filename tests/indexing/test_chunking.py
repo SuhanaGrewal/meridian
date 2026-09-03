@@ -1,4 +1,8 @@
-from meridian.indexing.chunking import split_into_paragraphs, split_into_sentences
+from meridian.indexing.chunking import (
+    split_into_paragraphs,
+    split_into_sections,
+    split_into_sentences,
+)
 
 
 def test_split_into_paragraphs_on_blank_lines():
@@ -56,3 +60,41 @@ def test_split_into_sentences_does_not_split_on_abbreviation_style_period_before
 
 def test_split_into_sentences_single_sentence():
     assert split_into_sentences("Just one sentence.") == ["Just one sentence."]
+
+
+def test_split_into_sections_splits_on_headings():
+    text = "# Title\nIntro text.\n\n## Subsection\nMore text here."
+
+    sections = split_into_sections(text)
+
+    assert len(sections) == 2
+    assert sections[0].startswith("# Title")
+    assert sections[1].startswith("## Subsection")
+
+
+def test_split_into_sections_keeps_leading_content_before_first_heading():
+    text = "Some intro with no heading.\n\n# First Heading\nBody text."
+
+    sections = split_into_sections(text)
+
+    assert sections[0] == "Some intro with no heading."
+    assert sections[1].startswith("# First Heading")
+
+
+def test_split_into_sections_no_headings_returns_single_section():
+    text = "Just plain text.\n\nNo headings anywhere in here."
+
+    assert split_into_sections(text) == [text]
+
+
+def test_split_into_sections_empty_text_returns_empty_list():
+    assert split_into_sections("") == []
+    assert split_into_sections("   \n\n  ") == []
+
+
+def test_split_into_sections_heading_at_end_with_no_body():
+    text = "Intro.\n\n# Trailing Heading"
+
+    sections = split_into_sections(text)
+
+    assert sections == ["Intro.", "# Trailing Heading"]
