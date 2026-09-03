@@ -1,10 +1,27 @@
-from meridian.indexing.source_readers import read_calendar_items, read_docs_items, read_gmail_items
+from meridian.indexing.source_readers import (
+    read_calendar_items,
+    read_docs_items,
+    read_gmail_items,
+    read_local_files_items,
+)
 from meridian.ingestion.calendar.event_parser import ParsedEvent
 from meridian.ingestion.calendar.store import CalendarStore
 from meridian.ingestion.docs.doc_parser import ParsedDoc
 from meridian.ingestion.docs.store import DocsStore
 from meridian.ingestion.gmail.message_parser import ParsedMessage
 from meridian.ingestion.gmail.store import GmailStore
+from meridian.ingestion.local_files.note_parser import ParsedNote
+from meridian.ingestion.local_files.store import NotesStore
+
+
+def _note(path="note.txt", content_text="Some note content.") -> ParsedNote:
+    return ParsedNote(
+        path=path,
+        content_text=content_text,
+        content_hash="hash-1",
+        size_bytes=len(content_text),
+        mtime_ns=100,
+    )
 
 
 def _doc(doc_id="doc-1", title="My Doc", content_text="## Section\nBody text.") -> ParsedDoc:
@@ -185,3 +202,33 @@ def test_read_docs_items_excludes_trashed_docs(tmp_path):
 
 def test_read_docs_items_handles_missing_db_file(tmp_path):
     assert read_docs_items(tmp_path / "does-not-exist.db") == []
+
+
+def test_read_local_files_items_returns_expected_fields(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+    store.upsert_note(_note())
+
+    items = read_local_files_items(tmp_path / "local_files.db")
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.item_id == "note.txt"
+    assert item.text == "Some note content."
+    assert item.has_headings is False
+    assert item.change_signal == "hash-1"
+    assert item.metadata["path"] == "note.txt"
+
+
+def test_read_local_files_items_excludes_deleted_notes(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+    store.upsert_note(_note(path="a.txt"))
+    store.upsert_note(_note(path="b.txt"))
+    store.mark_deleted("b.txt")
+
+    items = read_local_files_items(tmp_path / "local_files.db")
+
+    assert {item.item_id for item in items} == {"a.txt"}
+
+
+def test_read_local_files_items_handles_missing_db_file(tmp_path):
+    assert read_local_files_items(tmp_path / "does-not-exist.db") == []

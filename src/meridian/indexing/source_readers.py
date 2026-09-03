@@ -120,3 +120,30 @@ def read_docs_items(db_path: Path) -> list[SourceItem]:
             )
         )
     return items
+
+
+def read_local_files_items(db_path: Path) -> list[SourceItem]:
+    conn = _readonly_connection(db_path)
+    if conn is None:
+        return []
+
+    try:
+        rows = conn.execute(
+            "SELECT path, content_text, content_hash FROM notes WHERE is_deleted = 0"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    items = []
+    for row in rows:
+        text = (row["content_text"] or "").strip()
+        items.append(
+            SourceItem(
+                item_id=row["path"],
+                text=text,
+                has_headings=False,
+                change_signal=row["content_hash"],
+                metadata={"path": row["path"]},
+            )
+        )
+    return items
