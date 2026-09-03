@@ -29,7 +29,7 @@ src/meridian/
     calendar/       Phase 3 — Calendar polling + sync tokens
     docs/           Phase 4 — Docs polling + revision tracking
     local_files/    Phase 5 — notes/transcripts folder scanner, content-hash dedup
-  redaction/        Phase 6 — PII scrubbing before anything leaves the machine
+  redaction/        Phase 6 — call-time PII tokenization for external API calls
   indexing/         Phase 7 — structure-aware chunking, embeddings, hybrid search
   query/            Phase 8 — retrieval, rerank, grounded generation with citations
   knowledge_graph/  Phase 9 — entity extraction & cross-source linking
@@ -46,9 +46,10 @@ tests/              eval harness & unit tests (Phase 12+)
 ## Status
 
 Phase 1 (Google OAuth), Phase 2 (Gmail ingestion), Phase 3 (Calendar
-ingestion), Phase 4 (Docs ingestion), and Phase 5 (local files ingestion)
-are implemented. Phases are built and confirmed one at a time; see
-`CLAUDE.md` in this repo for the working agreement.
+ingestion), Phase 4 (Docs ingestion), Phase 5 (local files ingestion), and
+Phase 6 (redaction/tokenization engine) are implemented. Phases are built
+and confirmed one at a time; see `CLAUDE.md` in this repo for the working
+agreement.
 
 ## Setup
 
@@ -56,6 +57,7 @@ are implemented. Phases are built and confirmed one at a time; see
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+python -m spacy download en_core_web_lg  # required for phase 6 (redaction) - ~560MB, one-time
 cp .env.example .env  # fill in OAuth client id/secret, notes folder path, etc.
 ```
 
@@ -174,3 +176,40 @@ Inspect what got stored:
 ```
 sqlite3 data/ingestion/local_files/local_files.db "select count(*) from notes;"
 ```
+
+### Phase 6 (Redaction)
+
+No Google auth needed. This phase is a **call-time utility, not a batch
+job or a pipeline stage that runs on its own** — since local embeddings and
+retrieval (Phase 7+) never leave the machine, the only real point of
+external exposure is the moment something is actually sent to Claude's API
+(the future query/answer flow and digest/drafting flow). So redaction
+lives as two functions — `tokenize_for_external_call()` and
+`untokenize()` — meant to be called immediately before and after an
+external API call: tokenize right before sending, untokenize on the
+response, then let the mapping (a plain in-memory dict) go out of scope.
+Nothing is ever written to disk. There's no persistent store for this
+phase.
+
+Detected entities split into two groups:
+- **Reversible** (`PERSON`, `EMAIL_ADDRESS`, `PHONE_NUMBER`, `HOME_ADDRESS`)
+  get a unique numbered placeholder (`<PERSON_1>`, ...) recorded in the
+  mapping, so a drafted reply can still coherently reference a real name or
+  address once substituted back.
+- **Hard secrets** (credit cards, government ID numbers, IBAN/crypto,
+  IP/MAC addresses, API keys/passwords) become a fixed `[REDACTED]` marker
+  and are **never added to the mapping** — there is no way for those
+  values to reappear, even in a response.
+- `LOCATION`, `DATE_TIME`, `URL`, and nationality/religion/political terms
+  are deliberately left untouched — they're usually needed context (a
+  meeting's place or time), not sensitive identifiers.
+
+Since Phases 7/8/10 don't exist yet, there's no live call site to wire
+this into today. Try the round trip manually:
+
+```
+python -m meridian.redaction "Contact John Smith at john@example.com, my address is 123 Main St"
+```
+
+Every call logs entity type + count to the structured log (never the
+matched text itself).
