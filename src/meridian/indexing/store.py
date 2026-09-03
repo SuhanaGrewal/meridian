@@ -115,6 +115,12 @@ class IndexStore:
                     (cursor.lastrowid, record.text),
                 )
 
+    def get_indexed_item_ids(self, source: str) -> set[str]:
+        rows = self._conn.execute(
+            "SELECT source_item_id FROM indexed_items WHERE source = ?", (source,)
+        ).fetchall()
+        return {row["source_item_id"] for row in rows}
+
     def get_chunks_with_embeddings(self, source: str | None = None) -> list[sqlite3.Row]:
         if source is None:
             return self._conn.execute("SELECT * FROM chunks").fetchall()
