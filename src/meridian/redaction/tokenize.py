@@ -20,15 +20,27 @@ def _spans_overlap(a: Any, b: Any) -> bool:
     return a.start < b.end and b.start < a.end
 
 
-def _merge_spans(presidio_spans: list[Any], custom_spans: list[Any]) -> list[Any]:
-    """merges presidio's own results with our custom regex spans, dropping
-    any custom span that overlaps a presidio span already found - presidio's
-    own detections take priority so the same text is never double-processed."""
-    merged = list(presidio_spans)
-    for custom_span in custom_spans:
-        if not any(_spans_overlap(custom_span, existing) for existing in presidio_spans):
-            merged.append(custom_span)
-    return merged
+def _span_priority(span: Any) -> float:
+    # custom regex spans have no confidence score - treat them as lower
+    # priority than any real presidio match, but they're still considered
+    # when they don't overlap a presidio result at all.
+    return getattr(span, "score", -1.0)
+
+
+def _resolve_overlaps(spans: list[Any]) -> list[Any]:
+    """resolves overlapping spans - presidio itself can return multiple
+    recognizers matching the same text (e.g. a credit card number also
+    weakly matching a bank-number or driver's-license pattern), and a
+    custom regex span can overlap a presidio span too. keeping every
+    overlapping span would slice and replace the same text more than once
+    using stale offsets, corrupting the output - so only the
+    highest-priority span in each overlapping cluster survives."""
+    ordered = sorted(spans, key=_span_priority, reverse=True)
+    resolved: list[Any] = []
+    for span in ordered:
+        if not any(_spans_overlap(span, existing) for existing in resolved):
+            resolved.append(span)
+    return resolved
 
 
 def tokenize_for_external_call(
@@ -52,7 +64,7 @@ def tokenize_for_external_call(
     start = time.monotonic()
     presidio_spans = analyzer.analyze(text=text, entities=list(PRESIDIO_ENTITIES), language="en")
     custom_spans = find_secret_spans(text) + find_address_spans(text)
-    spans = _merge_spans(presidio_spans, custom_spans)
+    spans = _resolve_overlaps(presidio_spans + custom_spans)
 
     # number reversible placeholders in left-to-right reading order, before
     # substituting right-to-left (so earlier offsets stay valid as we go).

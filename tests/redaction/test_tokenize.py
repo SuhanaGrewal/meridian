@@ -1,7 +1,9 @@
+from dataclasses import dataclass
+
 from meridian.redaction.custom_recognizers import Span
 from meridian.redaction.tokenize import (
     TokenizationResult,
-    _merge_spans,
+    _resolve_overlaps,
     _spans_overlap,
     tokenize_for_external_call,
     untokenize,
@@ -14,6 +16,17 @@ class _FakeAnalyzer:
 
     def analyze(self, *, text, entities, language):
         return self._results
+
+
+@dataclass(frozen=True)
+class _ScoredSpan:
+    """mimics a real presidio RecognizerResult, which (unlike our own Span
+    dataclass) always carries a confidence score."""
+
+    entity_type: str
+    start: int
+    end: int
+    score: float
 
 
 def test_tokenization_result_holds_fields():
@@ -42,22 +55,34 @@ def test_spans_overlap_false_for_disjoint_ranges():
     assert _spans_overlap(a, b) is False
 
 
-def test_merge_spans_includes_non_overlapping_custom_spans():
-    presidio_spans = [Span(entity_type="PERSON", start=0, end=4)]
-    custom_spans = [Span(entity_type="HOME_ADDRESS", start=10, end=20)]
+def test_resolve_overlaps_keeps_non_overlapping_spans():
+    presidio_span = _ScoredSpan(entity_type="PERSON", start=0, end=4, score=0.9)
+    custom_span = Span(entity_type="HOME_ADDRESS", start=10, end=20)
 
-    merged = _merge_spans(presidio_spans, custom_spans)
+    resolved = _resolve_overlaps([presidio_span, custom_span])
 
-    assert len(merged) == 2
+    assert set(resolved) == {presidio_span, custom_span}
 
 
-def test_merge_spans_drops_overlapping_custom_spans():
-    presidio_spans = [Span(entity_type="PERSON", start=0, end=10)]
-    custom_spans = [Span(entity_type="HOME_ADDRESS", start=5, end=15)]
+def test_resolve_overlaps_drops_overlapping_custom_span_in_favor_of_presidio():
+    presidio_span = _ScoredSpan(entity_type="PERSON", start=0, end=10, score=0.9)
+    custom_span = Span(entity_type="HOME_ADDRESS", start=5, end=15)
 
-    merged = _merge_spans(presidio_spans, custom_spans)
+    resolved = _resolve_overlaps([presidio_span, custom_span])
 
-    assert merged == presidio_spans
+    assert resolved == [presidio_span]
+
+
+def test_resolve_overlaps_keeps_highest_scoring_presidio_span():
+    # reproduces a real observed case: a credit card number also weakly
+    # matched us_bank_number and us_driver_license patterns, all overlapping
+    strong = _ScoredSpan(entity_type="CREDIT_CARD", start=10, end=26, score=1.0)
+    weak_1 = _ScoredSpan(entity_type="US_BANK_NUMBER", start=10, end=26, score=0.05)
+    weak_2 = _ScoredSpan(entity_type="US_DRIVER_LICENSE", start=10, end=26, score=0.01)
+
+    resolved = _resolve_overlaps([weak_1, weak_2, strong])
+
+    assert resolved == [strong]
 
 
 def test_tokenize_reversible_entity_gets_numbered_placeholder():
@@ -106,6 +131,26 @@ def test_tokenize_empty_text_returns_empty_result_without_calling_analyzer():
     result = tokenize_for_external_call("", analyzer=_ExplodingAnalyzer())
 
     assert result == TokenizationResult(tokenized_text="", mapping={}, entity_counts={})
+
+
+def test_tokenize_does_not_corrupt_text_when_presidio_spans_overlap():
+    # regression test: presidio can return multiple overlapping matches for
+    # the same substring (e.g. a credit card number also weakly matching
+    # us_bank_number/us_driver_license) - processing all of them used to
+    # slice the string using stale offsets and silently drop trailing text.
+    text = "my card is 4111111111111111 done"
+    analyzer = _FakeAnalyzer(
+        [
+            _ScoredSpan(entity_type="CREDIT_CARD", start=11, end=27, score=1.0),
+            _ScoredSpan(entity_type="US_BANK_NUMBER", start=11, end=27, score=0.05),
+            _ScoredSpan(entity_type="US_DRIVER_LICENSE", start=11, end=27, score=0.01),
+        ]
+    )
+
+    result = tokenize_for_external_call(text, analyzer=analyzer)
+
+    assert result.tokenized_text == "my card is [REDACTED] done"
+    assert result.entity_counts == {"CREDIT_CARD": 1}
 
 
 def test_tokenize_includes_custom_address_and_secret_spans():
