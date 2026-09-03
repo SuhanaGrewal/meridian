@@ -127,3 +127,38 @@ def test_change_signal_is_scoped_per_source(tmp_path):
 
     assert store.get_change_signal("gmail", "shared-id") == "hash-gmail"
     assert store.get_change_signal("docs", "shared-id") == "hash-docs"
+
+
+def test_delete_item_removes_chunks_fts_and_change_signal(tmp_path):
+    store = IndexStore(tmp_path / "index.db")
+    store.upsert_item_chunks("gmail", "msg-1", _records("removable content"), _embeddings(1), {})
+    store.set_indexed("gmail", "msg-1", "hash-1")
+
+    store.delete_item("gmail", "msg-1")
+
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE source_item_id = ?", ("msg-1",)
+    ).fetchone()[0] == 0
+    assert store._conn.execute(
+        "SELECT * FROM chunks_fts WHERE chunks_fts MATCH 'removable'"
+    ).fetchall() == []
+    assert store.get_change_signal("gmail", "msg-1") is None
+
+
+def test_delete_item_does_not_affect_other_items(tmp_path):
+    store = IndexStore(tmp_path / "index.db")
+    store.upsert_item_chunks("gmail", "msg-1", _records("a"), _embeddings(1), {})
+    store.upsert_item_chunks("gmail", "msg-2", _records("b"), _embeddings(1), {})
+
+    store.delete_item("gmail", "msg-1")
+
+    count_msg2 = store._conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE source_item_id = ?", ("msg-2",)
+    ).fetchone()[0]
+    assert count_msg2 == 1
+
+
+def test_delete_item_on_unknown_item_is_a_no_op(tmp_path):
+    store = IndexStore(tmp_path / "index.db")
+
+    store.delete_item("gmail", "does-not-exist")  # should not raise

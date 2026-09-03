@@ -109,6 +109,16 @@ class IndexStore:
                     (cursor.lastrowid, record.text),
                 )
 
+    def delete_item(self, source: str, source_item_id: str) -> None:
+        """removes an item's chunks, fts entries, and change-signal record -
+        one store, one delete path, no second system to keep in sync."""
+        with self._conn:
+            self._delete_chunks_for_item(source, source_item_id)
+            self._conn.execute(
+                "DELETE FROM indexed_items WHERE source = ? AND source_item_id = ?",
+                (source, source_item_id),
+            )
+
     def get_change_signal(self, source: str, source_item_id: str) -> str | None:
         row = self._conn.execute(
             "SELECT change_signal FROM indexed_items WHERE source = ? AND source_item_id = ?",
