@@ -46,10 +46,10 @@ tests/              eval harness & unit tests (Phase 12+)
 ## Status
 
 Phase 1 (Google OAuth), Phase 2 (Gmail ingestion), Phase 3 (Calendar
-ingestion), Phase 4 (Docs ingestion), Phase 5 (local files ingestion), and
-Phase 6 (redaction/tokenization engine) are implemented. Phases are built
-and confirmed one at a time; see `CLAUDE.md` in this repo for the working
-agreement.
+ingestion), Phase 4 (Docs ingestion), Phase 5 (local files ingestion),
+Phase 6 (redaction/tokenization engine), and Phase 7 (indexing) are
+implemented. Phases are built and confirmed one at a time; see `CLAUDE.md`
+in this repo for the working agreement.
 
 ## Setup
 
@@ -60,6 +60,19 @@ pip install -e ".[dev]"
 python -m spacy download en_core_web_lg  # required for phase 6 (redaction) - ~560MB, one-time
 cp .env.example .env  # fill in OAuth client id/secret, notes folder path, etc.
 ```
+
+Phase 7 (indexing) needs `sentence-transformers`, which requires PyTorch.
+On macOS/Windows the default `pip install` gets a CPU-only build
+automatically. **On Linux**, the default PyPI wheel bundles full CUDA
+toolkits (multiple GB) even if you don't have a GPU — for a genuinely
+CPU-only install, run this *before* `pip install -e ".[dev]"`:
+
+```
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
+Its embedding model (`all-MiniLM-L6-v2`, ~90MB) downloads automatically on
+first use — no manual step like spaCy's.
 
 ### Phase 1 prerequisites (Google OAuth)
 
@@ -213,3 +226,34 @@ python -m meridian.redaction "Contact John Smith at john@example.com, my address
 
 Every call logs entity type + count to the structured log (never the
 matched text itself).
+
+### Phase 7 (Indexing)
+
+No Google auth needed — operates entirely on already-ingested local data.
+Run after any of Phases 2-5 have ingested something:
+
+```
+python -m meridian.indexing
+```
+
+Reads each source's ingestion database directly (read-only), splits each
+item's text into small "child" chunks (for accurate search matches) linked
+to larger "parent" context (for grounding an answer once a chunk is
+found), embeds the children locally via `sentence-transformers`, and
+stores everything — including the embeddings themselves — in one file:
+`data/indexing/index.db`. Skips any item that hasn't changed since it was
+last indexed, and removes chunks for anything deleted/trashed upstream.
+Pass `--source gmail` (repeatable) to limit indexing to specific sources,
+or `--full-reindex` to reprocess everything regardless of what changed.
+
+Search is genuinely hybrid: vector similarity (exact cosine similarity via
+plain numpy — brute-force, not an approximate index, since a personal
+corpus is nowhere near the scale where approximation would pay off) and
+keyword search (SQLite's built-in FTS5 — no extra dependency), merged via
+reciprocal rank fusion so a chunk ranking well on either signal can surface.
+
+Inspect what got stored:
+
+```
+sqlite3 data/indexing/index.db "select count(*) from chunks;"
+```
