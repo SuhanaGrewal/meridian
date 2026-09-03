@@ -1,4 +1,7 @@
 from meridian.indexing.chunking import (
+    _atomize,
+    _split_oversized,
+    pack_into_windows,
     split_into_paragraphs,
     split_into_sections,
     split_into_sentences,
@@ -98,3 +101,83 @@ def test_split_into_sections_heading_at_end_with_no_body():
     sections = split_into_sections(text)
 
     assert sections == ["Intro.", "# Trailing Heading"]
+
+
+def test_split_oversized_fixed_size_fallback():
+    atom = "x" * 25
+
+    pieces = _split_oversized(atom, 10)
+
+    assert pieces == ["x" * 10, "x" * 10, "x" * 5]
+
+
+def test_atomize_keeps_short_paragraphs_whole():
+    text = "Short one.\n\nShort two."
+
+    assert _atomize(text, 100) == ["Short one.", "Short two."]
+
+
+def test_atomize_splits_oversized_paragraph_into_sentences():
+    text = "This is sentence one. This is sentence two. This is sentence three."
+
+    atoms = _atomize(text, 30)
+
+    assert atoms == [
+        "This is sentence one.",
+        "This is sentence two.",
+        "This is sentence three.",
+    ]
+
+
+def test_atomize_falls_back_to_fixed_split_for_oversized_sentence():
+    text = "x" * 50  # one giant "sentence" with no punctuation at all
+
+    atoms = _atomize(text, 20)
+
+    assert atoms == ["x" * 20, "x" * 20, "x" * 10]
+
+
+def test_pack_into_windows_fits_in_one_window_when_short():
+    text = "Short paragraph one.\n\nShort paragraph two."
+
+    windows = pack_into_windows(text, target_size=1000)
+
+    assert windows == ["Short paragraph one. Short paragraph two."]
+
+
+def test_pack_into_windows_splits_into_multiple_when_long():
+    paragraphs = [f"Paragraph number {i} with some filler words in it." for i in range(10)]
+    text = "\n\n".join(paragraphs)
+
+    windows = pack_into_windows(text, target_size=100)
+
+    assert len(windows) > 1
+    for window in windows:
+        assert len(window) <= 100 + 1  # +1 for a joining space, no overlap here
+
+
+def test_pack_into_windows_carries_overlap_into_next_window():
+    paragraphs = [f"Paragraph {i} has some words padding it out further." for i in range(6)]
+    text = "\n\n".join(paragraphs)
+
+    windows = pack_into_windows(text, target_size=80, overlap=20)
+
+    assert len(windows) > 1
+    tail_of_first = windows[0][-20:].strip()
+    assert tail_of_first in windows[1]
+
+
+def test_pack_into_windows_zero_overlap_means_no_carry():
+    paragraphs = [f"Paragraph {i} has some words padding it out further." for i in range(6)]
+    text = "\n\n".join(paragraphs)
+
+    windows = pack_into_windows(text, target_size=80, overlap=0)
+
+    # each window should start with the same text as a fresh atom, not a
+    # fragment of the previous window's tail
+    assert windows[1].startswith("Paragraph")
+
+
+def test_pack_into_windows_empty_text_returns_empty_list():
+    assert pack_into_windows("", target_size=100) == []
+    assert pack_into_windows("   ", target_size=100) == []

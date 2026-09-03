@@ -43,3 +43,53 @@ def split_into_sentences(text: str) -> list[str]:
     """splits on sentence-ending punctuation followed by whitespace and a
     capital letter or digit - a light regex, no nlp model needed."""
     return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+
+
+def _split_oversized(atom: str, max_size: int) -> list[str]:
+    """fixed-size fallback split for a single atom still over max_size on
+    its own (a run-on block with no natural break) - an absolute last resort."""
+    return [atom[i : i + max_size] for i in range(0, len(atom), max_size)]
+
+
+def _atomize(text: str, max_size: int) -> list[str]:
+    """breaks text into pieces no larger than max_size, preferring natural
+    boundaries: paragraphs, then sentences within an oversized paragraph,
+    then a fixed-size cut as an absolute last resort."""
+    atoms: list[str] = []
+    for paragraph in split_into_paragraphs(text):
+        if len(paragraph) <= max_size:
+            atoms.append(paragraph)
+            continue
+        for sentence in split_into_sentences(paragraph):
+            if len(sentence) <= max_size:
+                atoms.append(sentence)
+            else:
+                atoms.extend(_split_oversized(sentence, max_size))
+    return atoms
+
+
+def pack_into_windows(text: str, *, target_size: int, overlap: int = 0) -> list[str]:
+    """greedily packs text into windows up to target_size, carrying the
+    trailing `overlap` characters of one window into the start of the next
+    so an idea sitting near a cut point isn't split across both halves.
+
+    used both for grouping sections into parent windows (overlap=0 - parents
+    don't need it) and for splitting a window into child chunks for
+    embedding (overlap=CHILD_OVERLAP_CHARS)."""
+    atoms = _atomize(text, target_size)
+    if not atoms:
+        return []
+
+    windows: list[str] = []
+    current = atoms[0]
+    for atom in atoms[1:]:
+        candidate = f"{current} {atom}"
+        if len(candidate) <= target_size:
+            current = candidate
+        else:
+            windows.append(current)
+            carry = current[-overlap:].strip() if overlap else ""
+            current = f"{carry} {atom}".strip() if carry else atom
+    windows.append(current)
+
+    return windows
