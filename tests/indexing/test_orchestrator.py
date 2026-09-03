@@ -136,6 +136,20 @@ def test_run_indexing_covers_all_sources_by_default(tmp_path):
     assert results["local_files"].items_indexed == 0  # no local_files.db present
 
 
+def test_index_source_force_reprocesses_unchanged_item(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    gmail_store.upsert_message(_message())
+    index_store = IndexStore(tmp_path / "index.db")
+    embedder = _FakeEmbedder()
+    index_source("gmail", tmp_path / "gmail.db", index_store, embedder)
+
+    stats = index_source("gmail", tmp_path / "gmail.db", index_store, embedder, force=True)
+
+    assert stats.items_indexed == 1
+    assert stats.items_skipped_unchanged == 0
+    assert embedder.calls == 2
+
+
 def test_run_indexing_respects_sources_filter(tmp_path):
     ingestion_dir = tmp_path / "ingestion"
     gmail_store = GmailStore(ingestion_dir / "gmail" / "gmail.db")

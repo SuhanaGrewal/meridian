@@ -39,12 +39,14 @@ def index_source(
     store: IndexStore,
     embedder: Any,
     *,
+    force: bool = False,
     logger: logging.Logger | None = None,
 ) -> IndexStats:
     """incrementally indexes one source: skips items whose change_signal is
     unchanged, re-chunks/re-embeds new or changed items, and reconciles
     deletions (anything previously indexed for this source that the reader
-    no longer returns, because it was deleted/trashed upstream)."""
+    no longer returns, because it was deleted/trashed upstream). force=True
+    bypasses the unchanged check, re-processing every item regardless."""
     stats = IndexStats()
     start = time.monotonic()
 
@@ -56,7 +58,7 @@ def index_source(
         stats.items_deleted += 1
 
     for item in items:
-        if store.get_change_signal(source, item.item_id) == item.change_signal:
+        if not force and store.get_change_signal(source, item.item_id) == item.change_signal:
             stats.items_skipped_unchanged += 1
             continue
 
@@ -97,6 +99,7 @@ def run_indexing(
     embedder: Any,
     *,
     sources: list[str] | None = None,
+    force: bool = False,
     logger: logging.Logger | None = None,
 ) -> dict[str, IndexStats]:
     """runs index_source() for each requested source (default: all four),
@@ -106,6 +109,6 @@ def run_indexing(
     db_paths = {name: ingestion_dir / name / f"{name}.db" for name in _READERS}
 
     return {
-        source: index_source(source, db_paths[source], store, embedder, logger=logger)
+        source: index_source(source, db_paths[source], store, embedder, force=force, logger=logger)
         for source in sources
     }
