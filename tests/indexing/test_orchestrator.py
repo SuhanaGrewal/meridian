@@ -1,7 +1,9 @@
 import numpy as np
 
-from meridian.indexing.orchestrator import IndexStats, index_source
+from meridian.indexing.orchestrator import IndexStats, index_source, run_indexing
 from meridian.indexing.store import IndexStore
+from meridian.ingestion.docs.doc_parser import ParsedDoc
+from meridian.ingestion.docs.store import DocsStore
 from meridian.ingestion.gmail.message_parser import ParsedMessage
 from meridian.ingestion.gmail.store import GmailStore
 
@@ -112,3 +114,35 @@ def test_index_source_with_no_ingested_data_returns_empty_stats(tmp_path):
     stats = index_source("gmail", tmp_path / "gmail.db", index_store, embedder)
 
     assert stats == IndexStats(duration_ms=stats.duration_ms)
+
+
+def test_run_indexing_covers_all_sources_by_default(tmp_path):
+    ingestion_dir = tmp_path / "ingestion"
+    gmail_store = GmailStore(ingestion_dir / "gmail" / "gmail.db")
+    gmail_store.upsert_message(_message())
+    docs_store = DocsStore(ingestion_dir / "docs" / "docs.db")
+    docs_store.upsert_document(
+        ParsedDoc(doc_id="doc-1", title="Doc", content_text="content", modified_time=None, content_hash="h1")
+    )
+    index_store = IndexStore(tmp_path / "index.db")
+    embedder = _FakeEmbedder()
+
+    results = run_indexing(ingestion_dir, index_store, embedder)
+
+    assert set(results.keys()) == {"gmail", "calendar", "docs", "local_files"}
+    assert results["gmail"].items_indexed == 1
+    assert results["docs"].items_indexed == 1
+    assert results["calendar"].items_indexed == 0  # no calendar.db present
+    assert results["local_files"].items_indexed == 0  # no local_files.db present
+
+
+def test_run_indexing_respects_sources_filter(tmp_path):
+    ingestion_dir = tmp_path / "ingestion"
+    gmail_store = GmailStore(ingestion_dir / "gmail" / "gmail.db")
+    gmail_store.upsert_message(_message())
+    index_store = IndexStore(tmp_path / "index.db")
+    embedder = _FakeEmbedder()
+
+    results = run_indexing(ingestion_dir, index_store, embedder, sources=["gmail"])
+
+    assert set(results.keys()) == {"gmail"}

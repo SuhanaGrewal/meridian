@@ -89,3 +89,23 @@ def index_source(
         )
 
     return stats
+
+
+def run_indexing(
+    ingestion_dir: Path,
+    store: IndexStore,
+    embedder: Any,
+    *,
+    sources: list[str] | None = None,
+    logger: logging.Logger | None = None,
+) -> dict[str, IndexStats]:
+    """runs index_source() for each requested source (default: all four),
+    resolving each source's ingestion database path the same way every
+    ingestion phase's CLI already does."""
+    sources = sources or list(_READERS.keys())
+    db_paths = {name: ingestion_dir / name / f"{name}.db" for name in _READERS}
+
+    return {
+        source: index_source(source, db_paths[source], store, embedder, logger=logger)
+        for source in sources
+    }
