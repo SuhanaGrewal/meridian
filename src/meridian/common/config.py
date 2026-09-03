@@ -24,6 +24,10 @@ class Config:
     def ingestion_dir(self) -> Path:
         return self.data_dir / "ingestion"
 
+    @property
+    def indexing_dir(self) -> Path:
+        return self.data_dir / "indexing"
+
 
 def load_config(*, load_env_file=True) -> Config:
     if load_env_file:
@@ -46,3 +50,4 @@ def ensure_dirs(config: Config) -> None:
     config.log_dir.mkdir(parents=True, exist_ok=True)
     config.auth_dir.mkdir(parents=True, exist_ok=True)
     config.ingestion_dir.mkdir(parents=True, exist_ok=True)
+    config.indexing_dir.mkdir(parents=True, exist_ok=True)
