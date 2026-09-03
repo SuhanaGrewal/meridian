@@ -108,3 +108,23 @@ class IndexStore:
                     "INSERT INTO chunks_fts (rowid, chunk_text) VALUES (?, ?)",
                     (cursor.lastrowid, record.text),
                 )
+
+    def get_change_signal(self, source: str, source_item_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT change_signal FROM indexed_items WHERE source = ? AND source_item_id = ?",
+            (source, source_item_id),
+        ).fetchone()
+        return row["change_signal"] if row else None
+
+    def set_indexed(self, source: str, source_item_id: str, change_signal: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO indexed_items (source, source_item_id, change_signal, indexed_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(source, source_item_id) DO UPDATE SET
+                    change_signal = excluded.change_signal,
+                    indexed_at = excluded.indexed_at
+                """,
+                (source, source_item_id, change_signal, _now()),
+            )

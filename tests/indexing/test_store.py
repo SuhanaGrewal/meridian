@@ -95,3 +95,35 @@ def test_upsert_item_chunks_does_not_affect_other_items(tmp_path):
         "SELECT COUNT(*) FROM chunks WHERE source_item_id = ?", ("msg-2",)
     ).fetchone()[0]
     assert count_msg2 == 1
+
+
+def test_get_change_signal_returns_none_for_unknown_item(tmp_path):
+    store = IndexStore(tmp_path / "index.db")
+
+    assert store.get_change_signal("gmail", "msg-1") is None
+
+
+def test_set_and_get_change_signal_round_trip(tmp_path):
+    store = IndexStore(tmp_path / "index.db")
+
+    store.set_indexed("gmail", "msg-1", "hash-abc")
+
+    assert store.get_change_signal("gmail", "msg-1") == "hash-abc"
+
+
+def test_set_indexed_overwrites_previous_signal(tmp_path):
+    store = IndexStore(tmp_path / "index.db")
+    store.set_indexed("gmail", "msg-1", "hash-1")
+
+    store.set_indexed("gmail", "msg-1", "hash-2")
+
+    assert store.get_change_signal("gmail", "msg-1") == "hash-2"
+
+
+def test_change_signal_is_scoped_per_source(tmp_path):
+    store = IndexStore(tmp_path / "index.db")
+    store.set_indexed("gmail", "shared-id", "hash-gmail")
+    store.set_indexed("docs", "shared-id", "hash-docs")
+
+    assert store.get_change_signal("gmail", "shared-id") == "hash-gmail"
+    assert store.get_change_signal("docs", "shared-id") == "hash-docs"
