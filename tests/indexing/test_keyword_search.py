@@ -60,6 +60,27 @@ def test_search_respects_k_limit(tmp_path):
     assert len(results) == 3
 
 
+def test_search_handles_natural_language_query_with_punctuation(tmp_path):
+    # regression test: a raw "?" or other punctuation used to crash fts5's
+    # own query-expression parser with a syntax error.
+    store = IndexStore(tmp_path / "index.db")
+    store.upsert_item_chunks(
+        "gmail", "msg-1", _record("the quarterly budget numbers"), _embedding(), {}
+    )
+
+    results = search(store, "What did we say about the budget?", k=5)
+
+    assert len(results) == 1
+    assert results[0][0] == "gmail:msg-1:0000"
+
+
+def test_search_punctuation_only_query_returns_empty_list(tmp_path):
+    store = IndexStore(tmp_path / "index.db")
+    store.upsert_item_chunks("gmail", "msg-1", _record("some content"), _embedding(), {})
+
+    assert search(store, "???", k=5) == []
+
+
 def test_search_ranks_denser_match_higher(tmp_path):
     store = IndexStore(tmp_path / "index.db")
     store.upsert_item_chunks(
