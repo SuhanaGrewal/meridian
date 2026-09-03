@@ -109,6 +109,21 @@ class IndexStore:
                     (cursor.lastrowid, record.text),
                 )
 
+    def get_chunks_with_embeddings(self, source: str | None = None) -> list[sqlite3.Row]:
+        if source is None:
+            return self._conn.execute("SELECT * FROM chunks").fetchall()
+        return self._conn.execute("SELECT * FROM chunks WHERE source = ?", (source,)).fetchall()
+
+    def get_chunk_row(self, chunk_id: str) -> sqlite3.Row | None:
+        return self._conn.execute("SELECT * FROM chunks WHERE chunk_id = ?", (chunk_id,)).fetchone()
+
+    def count_chunks(self, source: str | None = None) -> int:
+        if source is None:
+            return self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        return self._conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source = ?", (source,)
+        ).fetchone()[0]
+
     def delete_item(self, source: str, source_item_id: str) -> None:
         """removes an item's chunks, fts entries, and change-signal record -
         one store, one delete path, no second system to keep in sync."""
