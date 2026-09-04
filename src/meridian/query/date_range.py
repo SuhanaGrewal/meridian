@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 _WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+# which metadata key holds a usable date, per source - docs and local_files
+# have no date field at all in their chunk metadata (per source_readers.py).
+_DATE_METADATA_KEYS = {"gmail": "sent_at", "calendar": "start_at"}
 
 
 def _start_of_day(dt: datetime) -> datetime:
@@ -92,3 +96,45 @@ def extract_date_range(question: str, *, now: datetime) -> tuple[datetime, datet
             return start, start + timedelta(days=1)
 
     return None
+
+
+def parse_stored_date(value: str | None) -> datetime | None:
+    """parses an iso8601 string (full datetime or a bare date) into an
+    aware datetime. returns None for anything missing or unparseable,
+    rather than raising - a malformed stored date should never crash a
+    query, just be treated as unknown."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def chunk_in_range(
+    source: str, metadata: dict, date_range: tuple[datetime, datetime] | None
+) -> bool:
+    """checks whether a chunk's stored date falls within date_range.
+
+    fails open (returns True, i.e. "keep it") whenever there's no date
+    filter active, the source has no date concept at all (docs,
+    local_files), or the stored value is missing/unparseable - there's no
+    correct way to include-or-exclude an item by date when no usable date
+    exists, so excluding it would just be silently, incorrectly dropping
+    content a user might need."""
+    if date_range is None:
+        return True
+
+    metadata_key = _DATE_METADATA_KEYS.get(source)
+    if metadata_key is None:
+        return True
+
+    parsed = parse_stored_date(metadata.get(metadata_key))
+    if parsed is None:
+        return True
+
+    start, end = date_range
+    return start <= parsed < end

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from meridian.query.date_range import extract_date_range
+from meridian.query.date_range import chunk_in_range, extract_date_range, parse_stored_date
 
 # a fixed wednesday for deterministic tests
 _NOW = datetime(2024, 6, 12, 15, 30, tzinfo=timezone.utc)  # 2024-06-12 is a Wednesday
@@ -108,3 +108,73 @@ def test_unrecognized_phrase_returns_none():
 
 def test_no_time_reference_returns_none():
     assert extract_date_range("what's John's email address", now=_NOW) is None
+
+
+def test_parse_stored_date_full_datetime_with_offset():
+    parsed = parse_stored_date("2024-06-01T10:00:00-05:00")
+
+    assert parsed is not None
+    assert parsed.year == 2024 and parsed.month == 6 and parsed.day == 1
+
+
+def test_parse_stored_date_bare_date():
+    parsed = parse_stored_date("2024-06-01")
+
+    assert parsed == datetime(2024, 6, 1, tzinfo=timezone.utc)
+
+
+def test_parse_stored_date_naive_datetime_assumed_utc():
+    parsed = parse_stored_date("2024-06-01T10:00:00")
+
+    assert parsed == datetime(2024, 6, 1, 10, 0, tzinfo=timezone.utc)
+
+
+def test_parse_stored_date_none_or_empty_returns_none():
+    assert parse_stored_date(None) is None
+    assert parse_stored_date("") is None
+
+
+def test_parse_stored_date_unparseable_returns_none():
+    assert parse_stored_date("not a date") is None
+
+
+def test_chunk_in_range_no_filter_always_passes():
+    assert chunk_in_range("gmail", {"sent_at": "2020-01-01T00:00:00Z"}, None) is True
+
+
+def test_chunk_in_range_gmail_within_range():
+    date_range = (datetime(2024, 6, 10, tzinfo=timezone.utc), datetime(2024, 6, 17, tzinfo=timezone.utc))
+
+    assert chunk_in_range("gmail", {"sent_at": "2024-06-12T09:00:00Z"}, date_range) is True
+
+
+def test_chunk_in_range_gmail_outside_range():
+    date_range = (datetime(2024, 6, 10, tzinfo=timezone.utc), datetime(2024, 6, 17, tzinfo=timezone.utc))
+
+    assert chunk_in_range("gmail", {"sent_at": "2024-05-01T09:00:00Z"}, date_range) is False
+
+
+def test_chunk_in_range_calendar_all_day_event():
+    date_range = (datetime(2024, 6, 10, tzinfo=timezone.utc), datetime(2024, 6, 17, tzinfo=timezone.utc))
+
+    assert chunk_in_range("calendar", {"start_at": "2024-06-12"}, date_range) is True
+
+
+def test_chunk_in_range_docs_always_passes_no_date_concept():
+    date_range = (datetime(2024, 6, 10, tzinfo=timezone.utc), datetime(2024, 6, 17, tzinfo=timezone.utc))
+
+    assert chunk_in_range("docs", {"title": "My Doc"}, date_range) is True
+
+
+def test_chunk_in_range_local_files_always_passes_no_date_concept():
+    date_range = (datetime(2024, 6, 10, tzinfo=timezone.utc), datetime(2024, 6, 17, tzinfo=timezone.utc))
+
+    assert chunk_in_range("local_files", {"path": "note.txt"}, date_range) is True
+
+
+def test_chunk_in_range_missing_or_unparseable_date_passes():
+    date_range = (datetime(2024, 6, 10, tzinfo=timezone.utc), datetime(2024, 6, 17, tzinfo=timezone.utc))
+
+    assert chunk_in_range("gmail", {"sent_at": ""}, date_range) is True
+    assert chunk_in_range("calendar", {"start_at": None}, date_range) is True
+    assert chunk_in_range("gmail", {}, date_range) is True
