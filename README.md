@@ -48,9 +48,9 @@ tests/              eval harness & unit tests (Phase 12+)
 Phase 1 (Google OAuth), Phase 2 (Gmail ingestion), Phase 3 (Calendar
 ingestion), Phase 4 (Docs ingestion), Phase 5 (local files ingestion),
 Phase 6 (redaction/tokenization engine), Phase 7 (indexing), Phase 8
-(query), Phase 9 (entity graph), and Phase 10 (digest) are implemented.
-Phases are built and confirmed one at a time; see `CLAUDE.md` in this
-repo for the working agreement.
+(query), Phase 9 (entity graph), Phase 10 (digest), and Phase 11
+(security) are implemented. Phases are built and confirmed one at a
+time; see `CLAUDE.md` in this repo for the working agreement.
 
 ## Setup
 
@@ -415,3 +415,99 @@ sqlite3 data/digest/digest.db "select run_id, status, window_start, window_end f
 `digest_text` and `sources_text` are encrypted at rest as of Phase 11 - a
 raw `select digest_text ...` will show ciphertext; use
 `python -m meridian.digest review` to see the plaintext digest.
+
+### Phase 11 (Security)
+
+A cross-cutting phase touching several earlier ones, addressing five
+things: audit logging, scoped API keys, encrypted local storage, input
+validation, and dependency scanning. Two of these don't map cleanly onto
+a single-user local tool with no server or multi-tenant concerns, so
+they're addressed honestly below rather than forced into an enterprise
+shape.
+
+**Audit logging** — a durable, append-only, hash-chained log distinct
+from the regular operational log (`logs/meridian.log`). Every line in
+`logs/audit.log` includes a hash of its own content plus the previous
+line's hash, so any edit or deletion is detectable:
+
+```
+python -m meridian.security verify-audit
+```
+
+Recorded events: OAuth consent granted / token refreshed (not a silent
+reuse of a still-valid cached credential — that crosses no new
+authorization boundary), every real call to Claude (with redaction entity
+counts, never content — proof of what left the machine), and a digest
+being approved or rejected. This is "detectable if altered," not
+cryptographic non-repudiation against a hostile actor with full disk
+access — an unrealistic threat model for a single-user local app, where
+that actor would be the app's only user.
+
+**Encrypted local storage** — extended narrowly to `digest/store.py`'s
+`digest_text`/`sources_text` columns using the same Fernet primitive
+already proven in `auth/token_store.py`'s OAuth token encryption, rather
+than retrofitted across every store. Every other phase's README teaches
+"inspect what got stored" via a raw `sqlite3 ... select` against
+plaintext columns — encrypting those by default across 5 already-shipped
+phases would silently break that documented convention with no clean
+migration story for already-ingested historical data. The digest store
+is the newest, smallest-blast-radius target, and arguably the most apt
+anyway: it's LLM-synthesized content quoting across multiple sensitive
+sources at once. The same `security/field_encryption.py` utility is
+readily reusable to extend this to other stores later if warranted.
+
+Key management was also hardened: `auth/token_store.py`'s encryption key
+(previously a randomly generated file with no passphrase option) can now
+optionally be derived from `MERIDIAN_ENCRYPTION_PASSPHRASE` via PBKDF2 —
+zero-config installs see no change, since the fallback is exactly the
+prior random-key behavior.
+
+**Input validation** — a symlink-containment guard in the local files
+scanner (a symlink inside your notes folder pointing outside it is
+skipped, not silently followed and ingested), and a 200,000-character cap
+on free-text fields across all four ingestion parsers, applied before
+any hashing so change-detection stays consistent with the capped
+content.
+
+**Dependency scanning** — `pip-audit` (PyPA-maintained, free) is a dev
+dependency. Run it periodically, e.g. before a release:
+
+```
+pip-audit
+```
+
+No CI workflow was added for this — the project has no CI at all today,
+and building one solely to wrap a single command would be disproportionate
+infrastructure for a solo project. If CI is added later for other reasons,
+`pypa/gh-action-pip-audit` is a five-line addition.
+
+**Scoped API keys** — mostly a documentation/operator concern, not code,
+for a tool with no server and no multi-tenant surface:
+- Google OAuth already requests the minimum 4 scopes (`gmail.readonly`,
+  `calendar.readonly`, `documents.readonly`, `drive.readonly`) — nothing
+  broader is ever requested.
+- Anthropic API keys have no in-API scoping mechanism to restrict a key
+  to a subset of capabilities (confirmed against Anthropic's own docs) —
+  the closest realistic lever is Console-level: create a dedicated
+  Anthropic Workspace for Meridian and set a key expiration (e.g. 90
+  days) rather than "Never," rotating manually. This is operator
+  configuration, not something this codebase can enforce.
+- The one genuine code deliverable here is the log-scrubbing guard
+  described below.
+
+**Defense-in-depth log scrubbing** — `common/logging.py` now redacts any
+registered secret value from every log line before it's written, so a
+future accidental `logger.info(f"...{api_key}...")` can't leak a real
+key or client secret into `logs/meridian.log`.
+
+One-time manual smoke test, after any of the above changes:
+
+```
+python -m meridian.auth --force-refresh   # or a fresh consent flow
+python -m meridian.security verify-audit  # confirms a new hash-chained line landed
+python -m meridian.digest run
+python -m meridian.digest review --approve <run_id>
+sqlite3 data/digest/digest.db "select digest_text from digest_runs;"  # ciphertext
+python -m meridian.digest review                                     # plaintext
+python -m meridian.security verify-audit  # confirms the digest.reviewed event is intact too
+```
