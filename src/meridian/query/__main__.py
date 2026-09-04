@@ -59,6 +59,7 @@ def main() -> None:
         model=args.model or config.llm_model,
         source=args.source,
         logger=logger,
+        audit_log_dir=config.log_dir,
     )
 
     if result.abstained:

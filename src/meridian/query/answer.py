@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -14,6 +15,7 @@ from meridian.query.date_range import extract_date_range
 from meridian.query.prompt import SYSTEM_PROMPT, build_user_message, format_sources
 from meridian.query.retrieval import AbstainReason, RetrievedChunk, retrieve
 from meridian.redaction.tokenize import tokenize_for_external_call, untokenize
+from meridian.security.audit_log import record_event
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,7 @@ def ask(
     source: str | None = None,
     now: datetime | None = None,
     logger: logging.Logger | None = None,
+    audit_log_dir: Path | None = None,
 ) -> AnswerResult:
     """runs the full query pipeline: retrieve, then either abstain, report
     retrieval-only results (no api key configured), or generate a grounded
@@ -90,6 +93,11 @@ def ask(
 
     user_message = build_user_message(question, result.chunks)
     tokenization = tokenize_for_external_call(user_message, analyzer=analyzer, logger=logger)
+    if audit_log_dir is not None:
+        record_event(
+            audit_log_dir, "llm.external_call",
+            {"operation": "query.ask", "entity_counts": tokenization.entity_counts},
+        )
     raw_answer = call_claude(
         client,
         model=model,

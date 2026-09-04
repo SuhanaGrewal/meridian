@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -17,6 +18,7 @@ from meridian.digest.prompt import (
 from meridian.digest.state import DigestState
 from meridian.query.anthropic_client import call_claude
 from meridian.redaction.tokenize import tokenize_for_external_call, untokenize
+from meridian.security.audit_log import record_event
 
 
 def build_digest_graph(
@@ -32,6 +34,7 @@ def build_digest_graph(
     *,
     now: datetime | None = None,
     logger: logging.Logger | None = None,
+    audit_log_dir: Path | None = None,
 ) -> Any:
     """builds the digest state machine: gather -> (nothing_new | summarize
     -> review -> (approved | rejected)). real dependencies are closed over
@@ -72,6 +75,11 @@ def build_digest_graph(
             }
         user_message = build_digest_message(state["window_start"], state["window_end"], state["items"])
         tokenization = tokenize_for_external_call(user_message, analyzer=analyzer, logger=logger)
+        if audit_log_dir is not None:
+            record_event(
+                audit_log_dir, "llm.external_call",
+                {"operation": "digest.summarize", "entity_counts": tokenization.entity_counts},
+            )
         raw = call_claude(
             client, model=model, system=SYSTEM_PROMPT, user_message=tokenization.tokenized_text, logger=logger
         )

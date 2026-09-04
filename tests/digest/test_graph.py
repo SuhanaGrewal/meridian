@@ -75,11 +75,12 @@ class _FakeClient:
         self.messages = _FakeMessages(reply_text)
 
 
-def _build_graph(tmp_path, *, stores, client, db_name="checkpoints.db"):
+def _build_graph(tmp_path, *, stores, client, db_name="checkpoints.db", audit_log_dir=None):
     conn = sqlite3.connect(tmp_path / db_name, check_same_thread=False)
     checkpointer = SqliteSaver(conn)
     graph = build_digest_graph(
-        stores, stores, stores, stores, stores, _FakeAnalyzer(), client, "claude-haiku-4-5", checkpointer
+        stores, stores, stores, stores, stores, _FakeAnalyzer(), client, "claude-haiku-4-5", checkpointer,
+        audit_log_dir=audit_log_dir,
     )
     return graph, conn
 
@@ -153,6 +154,35 @@ def test_llm_called_exactly_once_across_pause_and_resume(tmp_path):
     graph.invoke(Command(resume=True), config=config)
 
     assert client.messages.call_count == 1
+    conn.close()
+
+
+def test_summarize_records_an_audit_event_when_llm_is_called(tmp_path):
+    import json
+
+    stores = _FakeStores(gmail=[_gmail_row()])
+    client = _FakeClient("Digest summary [1].")
+    audit_log_dir = tmp_path / "logs"
+    graph, conn = _build_graph(tmp_path, stores=stores, client=client, audit_log_dir=audit_log_dir)
+
+    graph.invoke(_INITIAL_STATE, config={"configurable": {"thread_id": "run-1"}})
+
+    lines = (audit_log_dir / "audit.log").read_text().strip().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["event_type"] == "llm.external_call"
+    assert entry["detail"]["operation"] == "digest.summarize"
+    conn.close()
+
+
+def test_no_llm_configured_records_no_audit_event(tmp_path):
+    stores = _FakeStores(gmail=[_gmail_row()])
+    audit_log_dir = tmp_path / "logs"
+    graph, conn = _build_graph(tmp_path, stores=stores, client=None, audit_log_dir=audit_log_dir)
+
+    graph.invoke(_INITIAL_STATE, config={"configurable": {"thread_id": "run-1"}})
+
+    assert not (audit_log_dir / "audit.log").exists()
     conn.close()
 
 

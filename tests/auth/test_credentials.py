@@ -25,7 +25,7 @@ def test_get_credentials_runs_consent_flow_when_store_is_empty(tmp_path, monkeyp
     mock_store.load.return_value = None
     monkeypatch.setattr(credentials_module, "EncryptedTokenStore", lambda auth_dir: mock_store)
 
-    fake_creds = MagicMock()
+    fake_creds = MagicMock(scopes=["https://www.googleapis.com/auth/gmail.readonly"])
     run_consent_flow = MagicMock(return_value=fake_creds)
     monkeypatch.setattr(credentials_module, "run_consent_flow", run_consent_flow)
 
@@ -99,3 +99,57 @@ def test_get_credentials_force_refresh_overrides_still_valid_credentials(tmp_pat
     valid_creds.refresh.assert_called_once()
     mock_store.save.assert_called_once_with(valid_creds)
     assert result is valid_creds
+
+
+def _read_audit_events(log_dir):
+    import json
+
+    path = log_dir / "audit.log"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().strip().splitlines()]
+
+
+def test_fresh_consent_flow_records_an_audit_event(tmp_path, monkeypatch):
+    config = _make_config(tmp_path)
+
+    mock_store = MagicMock()
+    mock_store.load.return_value = None
+    monkeypatch.setattr(credentials_module, "EncryptedTokenStore", lambda auth_dir: mock_store)
+    fake_creds = MagicMock(scopes=["a", "b", "c"])
+    monkeypatch.setattr(credentials_module, "run_consent_flow", MagicMock(return_value=fake_creds))
+
+    credentials_module.get_credentials(config=config)
+
+    events = _read_audit_events(config.log_dir)
+    assert len(events) == 1
+    assert events[0]["event_type"] == "auth.consent_granted"
+    assert events[0]["detail"] == {"scope_count": 3}
+
+
+def test_token_refresh_records_an_audit_event(tmp_path, monkeypatch):
+    config = _make_config(tmp_path)
+
+    expired_creds = MagicMock(valid=False, expired=True, refresh_token="refresh-token")
+    mock_store = MagicMock()
+    mock_store.load.return_value = expired_creds
+    monkeypatch.setattr(credentials_module, "EncryptedTokenStore", lambda auth_dir: mock_store)
+
+    credentials_module.get_credentials(config=config)
+
+    events = _read_audit_events(config.log_dir)
+    assert len(events) == 1
+    assert events[0]["event_type"] == "auth.token_refreshed"
+
+
+def test_reusing_a_valid_cached_credential_records_no_audit_event(tmp_path, monkeypatch):
+    config = _make_config(tmp_path)
+
+    valid_creds = MagicMock(valid=True, expired=False)
+    mock_store = MagicMock()
+    mock_store.load.return_value = valid_creds
+    monkeypatch.setattr(credentials_module, "EncryptedTokenStore", lambda auth_dir: mock_store)
+
+    credentials_module.get_credentials(config=config)
+
+    assert _read_audit_events(config.log_dir) == []

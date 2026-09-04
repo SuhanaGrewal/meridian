@@ -155,6 +155,27 @@ def test_review_approve_marks_run_approved_and_advances_cursor(tmp_path):
     conn.close()
 
 
+def test_review_records_a_digest_reviewed_audit_event(tmp_path):
+    import json
+
+    digest_store, checkpointer, stores, conn = _setup(tmp_path, gmail=[_gmail_row()])
+    client = _FakeClient()
+    audit_log_dir = tmp_path / "logs"
+    run = run_digest_job(now=_NOW, **_run_kwargs(tmp_path, stores, client, digest_store, checkpointer))
+
+    review_digest_job(
+        run_id=run.run_id, approve=True, audit_log_dir=audit_log_dir,
+        **_run_kwargs(tmp_path, stores, client, digest_store, checkpointer),
+    )
+
+    lines = (audit_log_dir / "audit.log").read_text().strip().splitlines()
+    entries = [json.loads(line) for line in lines]
+    assert len(entries) == 1
+    assert entries[0]["event_type"] == "digest.reviewed"
+    assert entries[0]["detail"] == {"run_id": run.run_id, "decision": "approved"}
+    conn.close()
+
+
 def test_review_reject_marks_run_rejected_and_still_advances_cursor(tmp_path):
     digest_store, checkpointer, stores, conn = _setup(tmp_path, gmail=[_gmail_row()])
     client = _FakeClient()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from google.auth.exceptions import TransportError
 from google.auth.transport.requests import Request
@@ -11,6 +12,7 @@ from meridian.auth.token_store import EncryptedTokenStore
 from meridian.common.config import Config, ensure_dirs, load_config
 from meridian.common.logging import get_logger, log_operation
 from meridian.common.retry import retry_with_backoff
+from meridian.security.audit_log import record_event
 
 
 def get_credentials(
@@ -35,13 +37,13 @@ def get_credentials(
         creds = store.load()
 
         if creds is not None and force_refresh and creds.refresh_token:
-            return _refresh_and_save(creds, store, logger)
+            return _refresh_and_save(creds, store, logger, config.log_dir)
 
         if creds is not None and creds.valid:
             return creds
 
         if creds is not None and creds.expired and creds.refresh_token:
-            return _refresh_and_save(creds, store, logger)
+            return _refresh_and_save(creds, store, logger, config.log_dir)
 
         if not interactive:
             raise RuntimeError(
@@ -50,11 +52,12 @@ def get_credentials(
 
         creds = run_consent_flow(config.google_client_id, config.google_client_secret)
         store.save(creds)
+        record_event(config.log_dir, "auth.consent_granted", {"scope_count": len(creds.scopes or [])})
         return creds
 
 
 def _refresh_and_save(
-    creds: Credentials, store: EncryptedTokenStore, logger: logging.Logger
+    creds: Credentials, store: EncryptedTokenStore, logger: logging.Logger, log_dir: Path
 ) -> Credentials:
     def do_refresh() -> Credentials:
         creds.refresh(Request())
@@ -68,4 +71,5 @@ def _refresh_and_save(
         operation="auth.refresh_token",
     )
     store.save(refreshed)
+    record_event(log_dir, "auth.token_refreshed", {})
     return refreshed

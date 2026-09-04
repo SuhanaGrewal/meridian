@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from langgraph.types import Command
 
 from meridian.digest.graph import build_digest_graph
 from meridian.digest.store import DigestStore
+from meridian.security.audit_log import record_event
 
 RunStatus = Literal["skipped_pending", "nothing_new", "awaiting_review"]
 ReviewStatus = Literal["not_found", "already_decided", "approved", "rejected"]
@@ -45,6 +47,7 @@ def run_digest_job(
     lookahead: timedelta = timedelta(days=3),
     now: datetime | None = None,
     logger: logging.Logger | None = None,
+    audit_log_dir: Path | None = None,
 ) -> RunDigestResult:
     """generates a new digest awaiting review, unless one is already
     pending - refusing to start a second run avoids duplicate/overlapping
@@ -63,7 +66,7 @@ def run_digest_job(
     run_id = str(uuid4())
     graph = build_digest_graph(
         gmail_store, calendar_store, docs_store, notes_store, entity_store,
-        analyzer, client, model, checkpointer, now=now, logger=logger,
+        analyzer, client, model, checkpointer, now=now, logger=logger, audit_log_dir=audit_log_dir,
     )
     config = {"configurable": {"thread_id": run_id}}
     result = graph.invoke(
@@ -104,6 +107,7 @@ def review_digest_job(
     run_id: str,
     approve: bool,
     logger: logging.Logger | None = None,
+    audit_log_dir: Path | None = None,
 ) -> ReviewResult:
     run = digest_store.get_run(run_id)
     if run is None:
@@ -113,7 +117,7 @@ def review_digest_job(
 
     graph = build_digest_graph(
         gmail_store, calendar_store, docs_store, notes_store, entity_store,
-        analyzer, client, model, checkpointer, logger=logger,
+        analyzer, client, model, checkpointer, logger=logger, audit_log_dir=audit_log_dir,
     )
     config = {"configurable": {"thread_id": run_id}}
     graph.invoke(Command(resume=approve), config=config)
@@ -124,6 +128,9 @@ def review_digest_job(
     else:
         digest_store.mark_rejected(run_id)
         status = "rejected"
+
+    if audit_log_dir is not None:
+        record_event(audit_log_dir, "digest.reviewed", {"run_id": run_id, "decision": status})
 
     # advances on either decision - there's no "regenerate" flow, and
     # re-covering the same window after a rejection would just waste

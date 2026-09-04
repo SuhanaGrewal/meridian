@@ -168,6 +168,34 @@ def test_ask_generates_answer_and_untokenizes_placeholders_back(tmp_path):
     assert "<PERSON_1>" in sent_user_message
 
 
+def test_ask_records_an_audit_event_for_the_external_llm_call(tmp_path):
+    import json
+
+    store = IndexStore(tmp_path / "index.db")
+    query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    _seed_high_confidence_chunk(
+        store, "Jane Doe presented the quarterly budget report", query_vec,
+        metadata={"subject": "Budget", "sender": "a@example.com", "sent_at": "2024-06-12T00:00:00Z"},
+    )
+    reranker = _FakeReranker({"Jane Doe presented the quarterly budget report": 10.0})
+    client = _FakeClient("An answer [1].")
+    audit_log_dir = tmp_path / "logs"
+
+    ask(
+        "who presented the budget report",
+        store=store, embedder=_FakeEmbedder(query_vec), reranker=reranker,
+        analyzer=_FakeAnalyzer(), client=client, model="claude-haiku-4-5",
+        now=_NOW, audit_log_dir=audit_log_dir,
+    )
+
+    lines = (audit_log_dir / "audit.log").read_text().strip().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["event_type"] == "llm.external_call"
+    assert entry["detail"]["operation"] == "query.ask"
+    assert "entity_counts" in entry["detail"]
+
+
 def test_ask_low_confidence_abstains_without_calling_llm(tmp_path):
     store = IndexStore(tmp_path / "index.db")
     query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)

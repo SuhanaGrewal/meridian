@@ -84,6 +84,7 @@ def main() -> None:
             lookback=timedelta(hours=args.lookback_hours),
             lookahead=timedelta(days=args.lookahead_days),
             logger=logger,
+            audit_log_dir=config.log_dir,
         )
         if result.status == "skipped_pending":
             print(f"A digest is already pending review (run_id={result.run_id}). Run `review` first.")
@@ -122,6 +123,7 @@ def main() -> None:
         run_id=run_id,
         approve=bool(args.approve),
         logger=logger,
+        audit_log_dir=config.log_dir,
     )
     print(f"{run_id}: {result.status}")
 
