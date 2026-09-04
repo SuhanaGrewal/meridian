@@ -33,6 +33,10 @@ class Config:
     def entity_graph_dir(self) -> Path:
         return self.data_dir / "entity_graph"
 
+    @property
+    def digest_dir(self) -> Path:
+        return self.data_dir / "digest"
+
 
 def load_config(*, load_env_file=True) -> Config:
     if load_env_file:
@@ -58,3 +62,4 @@ def ensure_dirs(config: Config) -> None:
     config.ingestion_dir.mkdir(parents=True, exist_ok=True)
     config.indexing_dir.mkdir(parents=True, exist_ok=True)
     config.entity_graph_dir.mkdir(parents=True, exist_ok=True)
+    config.digest_dir.mkdir(parents=True, exist_ok=True)
