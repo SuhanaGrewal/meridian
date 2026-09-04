@@ -8,6 +8,7 @@ from typing import Iterator
 
 from meridian.ingestion.local_files.note_parser import NoteParseError, parse_note_file
 from meridian.ingestion.local_files.store import NotesStore
+from meridian.security.validation import is_within_folder
 
 DEFAULT_EXTENSIONS = {".txt", ".md"}
 
@@ -32,6 +33,9 @@ def _iter_note_files(notes_folder: Path, extensions: set[str]) -> Iterator[Path]
 
         relative_parts = path.relative_to(notes_folder).parts
         if any(part.startswith(".") for part in relative_parts):
+            continue
+
+        if not is_within_folder(path, notes_folder):
             continue
 
         yield path

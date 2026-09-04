@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from meridian.security.validation import truncate_field
+
 
 class MessageParseError(Exception):
     pass
@@ -38,13 +40,13 @@ def parse_message(raw: dict[str, Any]) -> ParsedMessage:
         raise MessageParseError(f"missing required field: {exc}") from exc
 
     headers = _headers_dict(payload.get("headers", []))
-    subject = headers.get("subject", "")
+    subject = truncate_field(headers.get("subject", ""))
     sender = headers.get("from", "")
     recipients = _split_addresses(headers.get("to", "")) + _split_addresses(headers.get("cc", ""))
     label_ids = raw.get("labelIds", [])
 
     sent_at = _extract_sent_at(raw, headers)
-    body_text = _extract_body_text(payload)
+    body_text = truncate_field(_extract_body_text(payload))
     content_hash = _hash_content(subject, sender, recipients, body_text, label_ids)
 
     return ParsedMessage(

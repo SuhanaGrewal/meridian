@@ -121,3 +121,27 @@ def test_parse_document_hash_changes_when_content_changes():
     hash_two = parse_document(raw_two, modified_time=None).content_hash
 
     assert hash_one != hash_two
+
+
+def test_oversized_title_and_content_text_are_truncated():
+    from meridian.security.validation import MAX_FIELD_CHARS
+
+    raw = {
+        "documentId": "doc-4",
+        "title": "t" * (MAX_FIELD_CHARS + 1000),
+        "body": {"content": [_text_paragraph("c" * (MAX_FIELD_CHARS + 1000))]},
+    }
+
+    parsed = parse_document(raw, modified_time=None)
+
+    assert len(parsed.title) == MAX_FIELD_CHARS
+    assert len(parsed.content_text) == MAX_FIELD_CHARS
+
+
+def test_normal_sized_title_and_content_are_unaffected_by_truncation():
+    raw = {"documentId": "doc-5", "title": "My Doc", "body": {"content": [_text_paragraph("Hello")]}}
+
+    parsed = parse_document(raw, modified_time=None)
+
+    assert parsed.title == "My Doc"
+    assert parsed.content_text == "Hello"

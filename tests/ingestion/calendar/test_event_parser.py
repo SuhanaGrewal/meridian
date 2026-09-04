@@ -137,3 +137,30 @@ def test_parse_event_tolerates_cancelled_stub():
 def test_parse_event_missing_id_raises_event_parse_error():
     with pytest.raises(EventParseError):
         parse_event({"summary": "no id here"}, calendar_id="primary")
+
+
+def test_oversized_free_text_fields_are_truncated():
+    from meridian.security.validation import MAX_FIELD_CHARS
+
+    raw = {
+        "id": "evt-5",
+        "summary": "s" * (MAX_FIELD_CHARS + 1000),
+        "description": "d" * (MAX_FIELD_CHARS + 1000),
+        "location": "l" * (MAX_FIELD_CHARS + 1000),
+    }
+
+    parsed = parse_event(raw, calendar_id="primary")
+
+    assert len(parsed.summary) == MAX_FIELD_CHARS
+    assert len(parsed.description) == MAX_FIELD_CHARS
+    assert len(parsed.location) == MAX_FIELD_CHARS
+
+
+def test_normal_sized_free_text_fields_are_unaffected_by_truncation():
+    raw = {"id": "evt-6", "summary": "Standup", "description": "daily sync", "location": "Room A"}
+
+    parsed = parse_event(raw, calendar_id="primary")
+
+    assert parsed.summary == "Standup"
+    assert parsed.description == "daily sync"
+    assert parsed.location == "Room A"

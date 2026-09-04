@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from meridian.security.validation import truncate_field
+
 
 class EventParseError(Exception):
     pass
@@ -40,9 +42,9 @@ def parse_event(raw: dict[str, Any], *, calendar_id: str) -> ParsedEvent:
         event_id=event_id,
         ical_uid=raw.get("iCalUID"),
         recurring_event_id=raw.get("recurringEventId"),
-        summary=raw.get("summary", ""),
-        description=raw.get("description", ""),
-        location=raw.get("location", ""),
+        summary=truncate_field(raw.get("summary", "")),
+        description=truncate_field(raw.get("description", "")),
+        location=truncate_field(raw.get("location", "")),
         status=raw.get("status", "confirmed"),
         start_at=start_at,
         end_at=end_at,

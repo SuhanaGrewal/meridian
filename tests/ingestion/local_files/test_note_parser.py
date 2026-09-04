@@ -77,3 +77,19 @@ def test_parse_note_file_invalid_utf8_raises_note_parse_error(tmp_path):
 
     with pytest.raises(NoteParseError):
         parse_note_file(file_path, relative_to=notes_folder)
+
+
+def test_oversized_note_content_is_truncated(tmp_path):
+    from meridian.security.validation import MAX_FIELD_CHARS
+
+    notes_folder = tmp_path / "notes"
+    notes_folder.mkdir()
+    file_path = notes_folder / "big.txt"
+    huge_content = "x" * (MAX_FIELD_CHARS + 1000)
+    file_path.write_text(huge_content, encoding="utf-8")
+
+    parsed = parse_note_file(file_path, relative_to=notes_folder)
+
+    assert len(parsed.content_text) == MAX_FIELD_CHARS
+    # the hash covers the full raw bytes, unaffected by content_text truncation
+    assert parsed.content_hash == hashlib.sha256(huge_content.encode("utf-8")).hexdigest()

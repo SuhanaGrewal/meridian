@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from meridian.common.retry import retry_with_backoff
+from meridian.security.validation import truncate_field
 
 
 class NoteParseError(Exception):
@@ -47,7 +48,7 @@ def parse_note_file(path: Path, *, relative_to: Path, logger: logging.Logger | N
 
     return ParsedNote(
         path=path.relative_to(relative_to).as_posix(),
-        content_text=content_text,
+        content_text=truncate_field(content_text),
         content_hash=content_hash,
         size_bytes=stat.st_size,
         mtime_ns=stat.st_mtime_ns,

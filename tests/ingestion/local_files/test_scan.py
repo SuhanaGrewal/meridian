@@ -64,6 +64,21 @@ def test_iter_note_files_returns_sorted_results(tmp_path):
     assert found == ["a.txt", "b.txt"]
 
 
+def test_iter_note_files_skips_a_symlink_escaping_the_folder(tmp_path):
+    import os
+
+    notes_folder = tmp_path / "notes"
+    notes_folder.mkdir()
+    outside_target = tmp_path / "secret.txt"
+    outside_target.write_text("secret content")
+    os.symlink(outside_target, notes_folder / "escape.txt")
+    (notes_folder / "real.txt").write_text("real content")
+
+    found = {p.name for p in _iter_note_files(notes_folder, DEFAULT_EXTENSIONS)}
+
+    assert found == {"real.txt"}
+
+
 def _setup(tmp_path):
     notes_folder = tmp_path / "notes"
     notes_folder.mkdir()
@@ -171,6 +186,20 @@ def test_run_scan_ingests_all_matching_files(tmp_path):
     assert stats.notes_added == 2
     assert stats.files_scanned == 2
     assert store.count_notes() == 2
+
+
+def test_run_scan_never_ingests_a_symlink_escaping_the_folder(tmp_path):
+    import os
+
+    notes_folder, store = _setup(tmp_path)
+    outside_target = tmp_path / "secret.txt"
+    outside_target.write_text("secret content")
+    os.symlink(outside_target, notes_folder / "escape.txt")
+
+    run_scan(notes_folder, store)
+
+    assert store.count_notes() == 0
+    assert store.get_note_row("escape.txt") is None
 
 
 def test_run_scan_is_idempotent_when_rerun_unchanged(tmp_path):

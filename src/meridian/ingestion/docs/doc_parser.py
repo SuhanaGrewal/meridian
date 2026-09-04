@@ -4,6 +4,8 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
+from meridian.security.validation import truncate_field
+
 
 class DocParseError(Exception):
     pass
@@ -79,9 +81,9 @@ def parse_document(raw_document: dict[str, Any], *, modified_time: str | None) -
     except KeyError as exc:
         raise DocParseError(f"missing required field: {exc}") from exc
 
-    title = raw_document.get("title", "")
+    title = truncate_field(raw_document.get("title", ""))
     body_content = raw_document.get("body", {}).get("content", [])
-    content_text = _flatten_content(body_content)
+    content_text = truncate_field(_flatten_content(body_content))
     content_hash = hashlib.sha256(f"{title}\n{content_text}".encode("utf-8")).hexdigest()
 
     return ParsedDoc(

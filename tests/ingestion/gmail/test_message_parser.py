@@ -125,3 +125,42 @@ def test_content_hash_changes_when_body_changes():
     hash_two = parse_message(changed).content_hash
 
     assert hash_one != hash_two
+
+
+def test_oversized_body_text_and_subject_are_truncated():
+    from meridian.security.validation import MAX_FIELD_CHARS
+
+    huge_body = "x" * (MAX_FIELD_CHARS + 1000)
+    raw = {
+        "id": "msg-7",
+        "threadId": "thread-7",
+        "labelIds": [],
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": _headers(subject="y" * (MAX_FIELD_CHARS + 1000)),
+            "body": {"data": _b64(huge_body)},
+        },
+    }
+
+    parsed = parse_message(raw)
+
+    assert len(parsed.body_text) == MAX_FIELD_CHARS
+    assert len(parsed.subject) == MAX_FIELD_CHARS
+
+
+def test_normal_sized_fields_are_unaffected_by_truncation():
+    raw = {
+        "id": "msg-8",
+        "threadId": "thread-8",
+        "labelIds": [],
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": _headers(subject="Hello"),
+            "body": {"data": _b64("a normal message")},
+        },
+    }
+
+    parsed = parse_message(raw)
+
+    assert parsed.body_text == "a normal message"
+    assert parsed.subject == "Hello"
