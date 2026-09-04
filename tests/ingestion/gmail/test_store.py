@@ -100,3 +100,15 @@ def test_clear_sync_state_resets_to_none(tmp_path):
     store.clear_sync_state()
 
     assert store.get_sync_state().last_history_id is None
+
+
+def test_get_all_messages_returns_every_non_deleted_message(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(_message(message_id="msg-1"))
+    store.upsert_message(_message(message_id="msg-2"))
+    store.mark_deleted("msg-2")
+
+    rows = store.get_all_messages()
+
+    assert len(rows) == 1
+    assert rows[0]["message_id"] == "msg-1"

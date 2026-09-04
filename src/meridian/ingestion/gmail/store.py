@@ -149,3 +149,6 @@ class GmailStore:
 
     def count_messages(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+
+    def get_all_messages(self) -> list[sqlite3.Row]:
+        return self._conn.execute("SELECT * FROM messages WHERE is_deleted = 0").fetchall()

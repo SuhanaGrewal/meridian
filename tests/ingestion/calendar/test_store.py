@@ -154,3 +154,15 @@ def test_clear_sync_state_resets_to_none(tmp_path):
     store.clear_sync_state("primary")
 
     assert store.get_sync_state("primary").sync_token is None
+
+
+def test_get_all_events_returns_every_non_deleted_event(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.upsert_event(_event(event_id="evt-1"))
+    store.upsert_event(_event(event_id="evt-2"))
+    store.mark_deleted("primary", "evt-2")
+
+    rows = store.get_all_events()
+
+    assert len(rows) == 1
+    assert rows[0]["event_id"] == "evt-1"

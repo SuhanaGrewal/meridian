@@ -176,3 +176,6 @@ class CalendarStore:
         return self._conn.execute(
             "SELECT COUNT(*) FROM events WHERE calendar_id = ?", (calendar_id,)
         ).fetchone()[0]
+
+    def get_all_events(self) -> list[sqlite3.Row]:
+        return self._conn.execute("SELECT * FROM events WHERE is_deleted = 0").fetchall()
