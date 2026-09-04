@@ -4,6 +4,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from meridian.security.field_encryption import decrypt_field, encrypt_field
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS digest_runs (
     run_id       TEXT PRIMARY KEY,
@@ -31,12 +33,13 @@ def _now() -> str:
 
 
 class DigestStore:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, *, encryption_key: bytes):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        self._key = encryption_key
 
     def close(self) -> None:
         self._conn.close()
@@ -63,28 +66,37 @@ class DigestStore:
                     run_id,
                     window_start,
                     window_end,
-                    digest_text,
-                    sources_text,
+                    encrypt_field(digest_text, self._key),
+                    encrypt_field(sources_text, self._key),
                     item_count,
                     int(llm_used),
                     _now(),
                 ),
             )
 
-    def get_run(self, run_id: str) -> sqlite3.Row | None:
-        return self._conn.execute(
+    def _decrypt_row(self, row: sqlite3.Row) -> dict:
+        record = dict(row)
+        record["digest_text"] = decrypt_field(record["digest_text"], self._key)
+        record["sources_text"] = decrypt_field(record["sources_text"], self._key)
+        return record
+
+    def get_run(self, run_id: str) -> dict | None:
+        row = self._conn.execute(
             "SELECT * FROM digest_runs WHERE run_id = ?", (run_id,)
         ).fetchone()
+        return self._decrypt_row(row) if row is not None else None
 
-    def get_pending_run(self) -> sqlite3.Row | None:
-        return self._conn.execute(
+    def get_pending_run(self) -> dict | None:
+        row = self._conn.execute(
             "SELECT * FROM digest_runs WHERE status = 'pending' ORDER BY generated_at LIMIT 1"
         ).fetchone()
+        return self._decrypt_row(row) if row is not None else None
 
-    def list_pending_runs(self) -> list[sqlite3.Row]:
-        return self._conn.execute(
+    def list_pending_runs(self) -> list[dict]:
+        rows = self._conn.execute(
             "SELECT * FROM digest_runs WHERE status = 'pending' ORDER BY generated_at"
         ).fetchall()
+        return [self._decrypt_row(row) for row in rows]
 
     def mark_approved(self, run_id: str) -> None:
         with self._conn:

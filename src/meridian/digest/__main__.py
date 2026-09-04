@@ -17,11 +17,13 @@ from meridian.ingestion.gmail.store import GmailStore
 from meridian.ingestion.local_files.store import NotesStore
 from meridian.query.anthropic_client import build_client
 from meridian.redaction.analyzer import build_analyzer_engine
+from meridian.security.field_encryption import derive_or_load_key
 
 
 def _build_stores(config):
+    encryption_key = derive_or_load_key(config.security_dir)
     return {
-        "digest_store": DigestStore(config.digest_dir / "digest.db"),
+        "digest_store": DigestStore(config.digest_dir / "digest.db", encryption_key=encryption_key),
         "gmail_store": GmailStore(config.ingestion_dir / "gmail" / "gmail.db"),
         "calendar_store": CalendarStore(config.ingestion_dir / "calendar" / "calendar.db"),
         "docs_store": DocsStore(config.ingestion_dir / "docs" / "docs.db"),

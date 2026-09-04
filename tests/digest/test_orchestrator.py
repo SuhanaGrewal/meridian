@@ -1,12 +1,14 @@
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+from cryptography.fernet import Fernet
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from meridian.digest.orchestrator import review_digest_job, run_digest_job
 from meridian.digest.store import DigestStore
 
 _NOW = datetime(2024, 6, 10, tzinfo=timezone.utc)
+_KEY = Fernet.generate_key()
 
 
 def _gmail_row():
@@ -77,7 +79,7 @@ def _run_kwargs(tmp_path, stores, client, digest_store, checkpointer):
 
 
 def _setup(tmp_path, *, gmail=None, client=None):
-    digest_store = DigestStore(tmp_path / "digest.db")
+    digest_store = DigestStore(tmp_path / "digest.db", encryption_key=_KEY)
     conn = sqlite3.connect(tmp_path / "checkpoints.db", check_same_thread=False)
     checkpointer = SqliteSaver(conn)
     stores = _FakeStores(gmail=gmail)

@@ -411,3 +411,7 @@ Inspect what got stored:
 ```
 sqlite3 data/digest/digest.db "select run_id, status, window_start, window_end from digest_runs;"
 ```
+
+`digest_text` and `sources_text` are encrypted at rest as of Phase 11 - a
+raw `select digest_text ...` will show ciphertext; use
+`python -m meridian.digest review` to see the plaintext digest.
