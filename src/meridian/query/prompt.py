@@ -35,3 +35,25 @@ def _source_label(chunk: RetrievedChunk) -> str:
     if chunk.source == "local_files":
         return f"Note file at {metadata.get('path', '')}"
     return f"{chunk.source} item {chunk.source_item_id}"
+
+
+def build_user_message(question: str, chunks: list[RetrievedChunk]) -> str:
+    """assembles the question plus every retrieved chunk's parent context
+    into one message, numbered for citation. this whole string gets
+    tokenized exactly once before being sent externally."""
+    lines = [f"Question:\n{question}", "", "Context:"]
+    for index, chunk in enumerate(chunks, start=1):
+        lines.append(f"[{index}] {_source_label(chunk)}")
+        lines.append(chunk.parent_text)
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def format_sources(chunks: list[RetrievedChunk]) -> str:
+    """renders the final source list from data this project already owns -
+    not parsed out of claude's response, which only produces the inline
+    [N] citation markers in its prose."""
+    lines = ["Sources:"]
+    for index, chunk in enumerate(chunks, start=1):
+        lines.append(f"[{index}] {_source_label(chunk)}")
+    return "\n".join(lines)
