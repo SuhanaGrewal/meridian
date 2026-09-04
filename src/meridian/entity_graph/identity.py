@@ -29,15 +29,23 @@ def parse_person_header(raw: str) -> PersonIdentity:
     return PersonIdentity(display_name=name, email=email)
 
 
-def person_entity_id(identity: PersonIdentity) -> str:
+def person_identity_key(identity: PersonIdentity) -> str:
     """email is the strong identity key when known; a normalized name is
     the weak fallback key for people with no known email address."""
     if identity.email:
-        return f"PERSON:email:{identity.email}"
-    return f"PERSON:name:{normalize_text(identity.display_name)}"
+        return f"email:{identity.email}"
+    return f"name:{normalize_text(identity.display_name)}"
+
+
+def person_entity_id(identity: PersonIdentity) -> str:
+    return f"PERSON:{person_identity_key(identity)}"
+
+
+def text_identity_key(text: str) -> str:
+    """ORG/GPE/EVENT have no email concept - canonicalized purely by
+    normalized text."""
+    return f"name:{normalize_text(text)}"
 
 
 def text_entity_id(entity_type: str, text: str) -> str:
-    """ORG/GPE/EVENT have no email concept - canonicalized purely by
-    normalized text."""
-    return f"{entity_type}:name:{normalize_text(text)}"
+    return f"{entity_type}:{text_identity_key(text)}"

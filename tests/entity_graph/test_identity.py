@@ -3,7 +3,9 @@ from meridian.entity_graph.identity import (
     normalize_text,
     parse_person_header,
     person_entity_id,
+    person_identity_key,
     text_entity_id,
+    text_identity_key,
 )
 
 
@@ -74,3 +76,19 @@ def test_text_entity_id_normalizes():
 
 def test_text_entity_id_distinguishes_types():
     assert text_entity_id("GPE", "Paris") != text_entity_id("ORG", "Paris")
+
+
+def test_person_identity_key_prefers_email():
+    identity = PersonIdentity(display_name="Jane Doe", email="jane@example.com")
+
+    assert person_identity_key(identity) == "email:jane@example.com"
+
+
+def test_person_identity_key_falls_back_to_normalized_name():
+    identity = PersonIdentity(display_name="Jane Doe", email=None)
+
+    assert person_identity_key(identity) == "name:jane doe"
+
+
+def test_text_identity_key_normalizes():
+    assert text_identity_key("  Acme  Corp ") == "name:acme corp"
