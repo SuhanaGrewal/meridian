@@ -47,9 +47,9 @@ tests/              eval harness & unit tests (Phase 12+)
 
 Phase 1 (Google OAuth), Phase 2 (Gmail ingestion), Phase 3 (Calendar
 ingestion), Phase 4 (Docs ingestion), Phase 5 (local files ingestion),
-Phase 6 (redaction/tokenization engine), and Phase 7 (indexing) are
-implemented. Phases are built and confirmed one at a time; see `CLAUDE.md`
-in this repo for the working agreement.
+Phase 6 (redaction/tokenization engine), Phase 7 (indexing), and Phase 8
+(query) are implemented. Phases are built and confirmed one at a time;
+see `CLAUDE.md` in this repo for the working agreement.
 
 ## Setup
 
@@ -217,8 +217,9 @@ Detected entities split into two groups:
   are deliberately left untouched — they're usually needed context (a
   meeting's place or time), not sensitive identifiers.
 
-Since Phases 7/8/10 don't exist yet, there's no live call site to wire
-this into today. Try the round trip manually:
+Phase 8 (query) is the first live call site — it tokenizes the whole
+prompt once before sending it to Claude and untokenizes the response
+once. You can still try the round trip manually on any text:
 
 ```
 python -m meridian.redaction "Contact John Smith at john@example.com, my address is 123 Main St"
@@ -257,3 +258,47 @@ Inspect what got stored:
 ```
 sqlite3 data/indexing/index.db "select count(*) from chunks;"
 ```
+
+### Phase 8 (Query)
+
+No Google auth needed — operates entirely on the local index built by
+Phase 7. Run:
+
+```
+python -m meridian.query "what's on my calendar this week"
+```
+
+**This works fully without an `LLM_API_KEY`** — it retrieves the most
+relevant chunks (hybrid vector + keyword search, reranked by a local
+cross-encoder), applies any date-range phrase found in the question
+("this week", "last month", "last Tuesday", etc. — parsed with the
+standard library only, no network call), and prints the retrieved context
+plus a confidence score instead of a generated answer. If nothing relevant
+enough is found, it says so directly instead of guessing (an "abstain",
+with a specific reason: no matches at all, matches but none in the
+requested date range, or matches that aren't confident enough).
+
+To get a real generated answer instead of just retrieved context, set
+`LLM_API_KEY` in `.env` (an [Anthropic API key](https://console.anthropic.com/settings/keys))
+and optionally `LLM_MODEL` (defaults to `claude-haiku-4-5`, the cheapest
+current model — a typical question costs well under a cent). Every claim
+in a generated answer cites the bracketed source number(s) it came from,
+and the exact context sent to Claude has names/emails/phone
+numbers/addresses replaced with placeholders (`<PERSON_1>`, etc.) by
+Phase 6's redaction step first, substituted back only after the response
+comes back — so raw personal data is never what actually leaves the
+machine.
+
+Other flags: `--source gmail` to search one source only, `--top-k 3` to
+change how many chunks are retrieved, `--model claude-sonnet-5` to
+override the model for one run.
+
+Known limitation: date-range phrases are computed in UTC calendar days,
+not your local wall-clock day — fine for a personal tool, but "today"
+could be off by a few hours right around midnight depending on your
+timezone.
+
+A test that makes a real (paid) Claude API call exists
+(`tests/query/test_answer_real.py`) but only runs if you explicitly set
+`MERIDIAN_RUN_LIVE_LLM_TESTS=1` in addition to `LLM_API_KEY` — it's
+skipped by default so the regular test suite never spends real money.
