@@ -12,6 +12,30 @@ _CONFIGURED_LOGGERS: set[str] = set()
 
 _BASE_RECORD_ATTRS = set(logging.makeLogRecord({}).__dict__.keys())
 
+_REGISTERED_SECRETS: list[str] = []
+
+
+def register_secret(value: str) -> None:
+    """registers a value to be scrubbed from every log line - defense in
+    depth against a future accidental logger.info(f"...{api_key}...").
+    skips falsy values: an unset (empty-string) secret must never be
+    registered, or _scrub would replace every occurrence of "" in every
+    string and corrupt all log output."""
+    if value and value not in _REGISTERED_SECRETS:
+        _REGISTERED_SECRETS.append(value)
+
+
+def _scrub(value):
+    if isinstance(value, str):
+        for secret in _REGISTERED_SECRETS:
+            value = value.replace(secret, "[SCRUBBED]")
+        return value
+    if isinstance(value, dict):
+        return {key: _scrub(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_scrub(item) for item in value]
+    return value
+
 
 class _JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -31,6 +55,7 @@ class _JsonFormatter(logging.Formatter):
                 payload[key] = value
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
+        payload = _scrub(payload)
         return json.dumps(payload, default=str)
 
 

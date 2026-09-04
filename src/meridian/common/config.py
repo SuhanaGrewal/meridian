@@ -6,6 +6,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from meridian.common.logging import register_secret
+
 
 @dataclass(frozen=True)
 class Config:
@@ -48,7 +50,7 @@ def load_config(*, load_env_file=True) -> Config:
 
     notes_folder = os.environ.get("MERIDIAN_NOTES_FOLDER", "").strip()
 
-    return Config(
+    config = Config(
         data_dir=Path(os.environ.get("MERIDIAN_DATA_DIR", "./data")).expanduser().resolve(),
         log_dir=Path(os.environ.get("MERIDIAN_LOG_DIR", "./logs")).expanduser().resolve(),
         notes_folder=Path(notes_folder).expanduser().resolve() if notes_folder else None,
@@ -57,6 +59,12 @@ def load_config(*, load_env_file=True) -> Config:
         llm_api_key=os.environ.get("LLM_API_KEY", ""),
         llm_model=os.environ.get("LLM_MODEL", "claude-haiku-4-5"),
     )
+    # every phase's __main__.py already calls load_config() - this is the
+    # single choke point that makes the log-scrubbing guard apply
+    # everywhere with no other file needing an edit.
+    register_secret(config.google_client_secret)
+    register_secret(config.llm_api_key)
+    return config
 
 
 def ensure_dirs(config: Config) -> None:
