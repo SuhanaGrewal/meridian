@@ -48,9 +48,9 @@ tests/              eval harness & unit tests (Phase 12+)
 Phase 1 (Google OAuth), Phase 2 (Gmail ingestion), Phase 3 (Calendar
 ingestion), Phase 4 (Docs ingestion), Phase 5 (local files ingestion),
 Phase 6 (redaction/tokenization engine), Phase 7 (indexing), Phase 8
-(query), and Phase 9 (entity graph) are implemented. Phases are built
-and confirmed one at a time; see `CLAUDE.md` in this repo for the
-working agreement.
+(query), Phase 9 (entity graph), and Phase 10 (digest) are implemented.
+Phases are built and confirmed one at a time; see `CLAUDE.md` in this
+repo for the working agreement.
 
 ## Setup
 
@@ -353,3 +353,61 @@ matching, so "Jon Smith" won't link to "John Smith"; and two different
 real people who happen to share an exact name will incorrectly merge
 into one entity. Both are reasonable trade-offs for a personal-scale tool
 without pulling in a fuzzy-matching dependency.
+
+### Phase 10 (Digest)
+
+Meant to be invoked periodically (e.g. via cron/launchd — there's no
+in-process scheduler anywhere in this project, same as every other
+phase's one-shot CLI). Two subcommands, meant to be run as two separate
+invocations — generate now, review later:
+
+```
+python -m meridian.digest run
+python -m meridian.digest review
+python -m meridian.digest review --approve <run_id>   # or --reject
+```
+
+`run` gathers what's new since the last reviewed digest (recent Gmail
+messages, modified Docs, updated notes, notable entity mentions) plus
+what's upcoming in the next few days (Calendar) — no search, embeddings,
+or reranking involved, just each source's own raw data — and produces a
+digest that **always pauses for human review before being considered
+final**, per this project's "nothing acts autonomously" principle. Since
+every Google API scope here is read-only, there's nothing to "send" —
+approval means accepting the digest itself, not authorizing an outbound
+action.
+
+This is the first phase built on **LangGraph** (a genuinely lightweight
+addition — ~4MB across ~13 small packages, no LLM provider wrapper
+needed since it calls the plain `anthropic` client directly, same as
+Phase 8). The digest is a small state machine: gather → (nothing to
+report, or) generate a summary → **pause for approval** → approved or
+rejected. The pause uses LangGraph's `interrupt()` mechanism, which
+requires saving execution state to disk so it can resume in a completely
+separate process later — that's what `data/digest/checkpoints.db` is
+(LangGraph's own internal bookkeeping, serialized opaquely — this
+project's code never reads it directly). The actual human-facing
+record — the digest text, its sources, and its approve/reject status —
+lives in a second, plain, fully-readable file this project owns and
+controls: `data/digest/digest.db`.
+
+**Runs fully without an `LLM_API_KEY`** — `run` still gathers everything
+and produces a plain grouped listing (no narrative summary) at zero
+cost, and that listing still goes through the same approval step. Set
+`LLM_API_KEY` (and optionally `LLM_MODEL`/`--model`) to get an actual
+generated summary instead, redacted the same way Phase 8's answers are
+(tokenized once before the call, untokenized once on the response).
+
+Only one digest can be pending at a time — running `run` again before
+reviewing the current one just reports that it's still pending, rather
+than generating (and potentially paying for) an overlapping second
+digest. `--lookback-hours` (default 24) sets how far back the very first
+run looks before any review cursor exists; `--lookahead-days` (default
+3) sets how far ahead Calendar looks for upcoming events, independent of
+that cursor.
+
+Inspect what got stored:
+
+```
+sqlite3 data/digest/digest.db "select run_id, status, window_start, window_end from digest_runs;"
+```
