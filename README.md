@@ -40,7 +40,7 @@ src/meridian/
 config/             configuration files
 data/               local index & ingested data (gitignored)
 logs/               structured logs (gitignored)
-tests/              eval harness & unit tests (Phase 12+)
+tests/              eval harness & unit tests (Phase 12)
 ```
 
 ## Status
@@ -48,9 +48,10 @@ tests/              eval harness & unit tests (Phase 12+)
 Phase 1 (Google OAuth), Phase 2 (Gmail ingestion), Phase 3 (Calendar
 ingestion), Phase 4 (Docs ingestion), Phase 5 (local files ingestion),
 Phase 6 (redaction/tokenization engine), Phase 7 (indexing), Phase 8
-(query), Phase 9 (entity graph), Phase 10 (digest), and Phase 11
-(security) are implemented. Phases are built and confirmed one at a
-time; see `CLAUDE.md` in this repo for the working agreement.
+(query), Phase 9 (entity graph), Phase 10 (digest), Phase 11 (security),
+and Phase 12 (eval harness) are implemented. Phases are built and
+confirmed one at a time; see `CLAUDE.md` in this repo for the working
+agreement.
 
 ## Setup
 
@@ -510,4 +511,45 @@ python -m meridian.digest review --approve <run_id>
 sqlite3 data/digest/digest.db "select digest_text from digest_runs;"  # ciphertext
 python -m meridian.digest review                                     # plaintext
 python -m meridian.security verify-audit  # confirms the digest.reviewed event is intact too
+```
+
+### Phase 12 (Tests / eval harness)
+
+A regression harness for the retrieval pipeline built in Phase 8, living
+under `tests/eval/` (not a new `src/meridian/` module — `tests/` isn't
+packaged for install, so there's no `python -m meridian.tests` CLI to
+extend; it runs the same way as every other test, via plain `pytest`).
+
+`tests/eval/golden_dataset.py` defines a small synthetic corpus (18
+documents spanning all four ingestion sources) and 18 questions against
+it — most single-source, a couple cross-source, a few designed to have
+no answer in the corpus at all. `tests/eval/scoring.py` holds the scoring
+math: precision, recall, reciprocal rank (mean rank of the first correct
+result), and a citation-index extractor.
+
+Two eval tests consume that dataset:
+
+- `tests/eval/test_retrieval_eval.py` — fast, free, deterministic (fake
+  embeddings/reranker), runs in the default `pytest` invocation alongside
+  every other test. Asserts the retrieval pipeline finds the right
+  sources at a threshold, and that every "no answer in the corpus"
+  question actually causes an abstain.
+- `tests/eval/test_answer_eval_real.py` — opt-in, gated exactly like
+  `tests/query/test_answer_real.py` (`LLM_API_KEY` +
+  `MERIDIAN_RUN_LIVE_LLM_TESTS=1`, skipped otherwise). Runs a bounded
+  subset of the golden questions through the real embedder, cross-encoder
+  reranker, and Claude, and asserts every `[N]` citation in the generated
+  answer actually refers to a retrieved source — the concrete check
+  behind "grounded, not hallucinated."
+
+Run the fast suite same as always:
+
+```
+pytest
+```
+
+Run the real one (costs a small amount of real API usage):
+
+```
+LLM_API_KEY=<key> MERIDIAN_RUN_LIVE_LLM_TESTS=1 pytest tests/eval/test_answer_eval_real.py -v
 ```
