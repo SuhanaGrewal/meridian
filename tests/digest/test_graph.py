@@ -1,0 +1,169 @@
+import sqlite3
+
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.types import Command
+
+from meridian.digest.graph import build_digest_graph
+
+_INITIAL_STATE = {
+    "window_start": "2024-06-01T00:00:00Z",
+    "window_end": "2024-06-10T00:00:00Z",
+    "lookahead_end": "2024-06-17T00:00:00Z",
+}
+
+
+def _gmail_row():
+    return {"sender": "jane@example.com", "sent_at": "2024-06-05T00:00:00Z", "subject": "Budget", "body_text": "hello"}
+
+
+class _FakeStores:
+    """implements all five store read methods gather_items() calls - one
+    instance is passed for all five store parameters, since each param is
+    only ever called through its own specific method name."""
+
+    def __init__(self, gmail=None, calendar=None, docs=None, notes=None, entities=None):
+        self.gmail = gmail or []
+        self.calendar = calendar or []
+        self.docs = docs or []
+        self.notes = notes or []
+        self.entities = entities or []
+
+    def list_messages_since(self, since):
+        return self.gmail
+
+    def list_events_upcoming(self, now, lookahead_end):
+        return self.calendar
+
+    def list_docs_modified_since(self, since):
+        return self.docs
+
+    def list_notes_updated_since(self, since):
+        return self.notes
+
+    def list_entities_mentioned_since(self, since):
+        return self.entities
+
+
+class _FakeAnalyzer:
+    def analyze(self, text, entities, language):
+        return []
+
+
+class _FakeTextBlock:
+    def __init__(self, text):
+        self.type = "text"
+        self.text = text
+
+
+class _FakeResponse:
+    def __init__(self, text):
+        self.content = [_FakeTextBlock(text)]
+
+
+class _FakeMessages:
+    def __init__(self, reply_text):
+        self.reply_text = reply_text
+        self.call_count = 0
+
+    def create(self, **kwargs):
+        self.call_count += 1
+        return _FakeResponse(self.reply_text)
+
+
+class _FakeClient:
+    def __init__(self, reply_text="Digest summary [1]."):
+        self.messages = _FakeMessages(reply_text)
+
+
+def _build_graph(tmp_path, *, stores, client, db_name="checkpoints.db"):
+    conn = sqlite3.connect(tmp_path / db_name, check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
+    graph = build_digest_graph(
+        stores, stores, stores, stores, stores, _FakeAnalyzer(), client, "claude-haiku-4-5", checkpointer
+    )
+    return graph, conn
+
+
+def test_nothing_new_short_circuits_without_interrupt(tmp_path):
+    stores = _FakeStores()
+    graph, conn = _build_graph(tmp_path, stores=stores, client=_FakeClient())
+
+    result = graph.invoke(_INITIAL_STATE, config={"configurable": {"thread_id": "run-empty"}})
+
+    assert "__interrupt__" not in result
+    assert result["digest_text"] == ""
+    assert result["llm_used"] is False
+    conn.close()
+
+
+def test_no_llm_configured_uses_plaintext_digest_and_still_pauses(tmp_path):
+    stores = _FakeStores(gmail=[_gmail_row()])
+    graph, conn = _build_graph(tmp_path, stores=stores, client=None)
+
+    result = graph.invoke(_INITIAL_STATE, config={"configurable": {"thread_id": "run-1"}})
+
+    assert "__interrupt__" in result
+    assert result["llm_used"] is False
+    assert "gmail:" in result["digest_text"]
+    conn.close()
+
+
+def test_llm_configured_generates_summary_and_pauses(tmp_path):
+    stores = _FakeStores(gmail=[_gmail_row()])
+    client = _FakeClient("Digest summary [1].")
+    graph, conn = _build_graph(tmp_path, stores=stores, client=client)
+
+    result = graph.invoke(_INITIAL_STATE, config={"configurable": {"thread_id": "run-1"}})
+
+    assert "__interrupt__" in result
+    assert result["llm_used"] is True
+    assert result["digest_text"] == "Digest summary [1]."
+    conn.close()
+
+
+def test_pause_and_resume_across_separate_checkpointer_connections(tmp_path):
+    stores = _FakeStores(gmail=[_gmail_row()])
+    client = _FakeClient()
+    config = {"configurable": {"thread_id": "run-1"}}
+
+    graph1, conn1 = _build_graph(tmp_path, stores=stores, client=client)
+    result = graph1.invoke(_INITIAL_STATE, config=config)
+    assert "__interrupt__" in result
+    conn1.close()
+
+    # simulate a brand-new process: fresh connection, fresh checkpointer, fresh graph
+    graph2, conn2 = _build_graph(tmp_path, stores=stores, client=client)
+
+    snapshot = graph2.get_state(config)
+    assert snapshot.next == ("review",)
+
+    final = graph2.invoke(Command(resume=True), config=config)
+
+    assert final["decision"] is True
+    conn2.close()
+
+
+def test_llm_called_exactly_once_across_pause_and_resume(tmp_path):
+    stores = _FakeStores(gmail=[_gmail_row()])
+    client = _FakeClient()
+    config = {"configurable": {"thread_id": "run-1"}}
+    graph, conn = _build_graph(tmp_path, stores=stores, client=client)
+
+    graph.invoke(_INITIAL_STATE, config=config)
+    graph.invoke(Command(resume=True), config=config)
+
+    assert client.messages.call_count == 1
+    conn.close()
+
+
+def test_resume_with_false_routes_to_rejected(tmp_path):
+    stores = _FakeStores(gmail=[_gmail_row()])
+    client = _FakeClient()
+    config = {"configurable": {"thread_id": "run-1"}}
+    graph, conn = _build_graph(tmp_path, stores=stores, client=client)
+
+    graph.invoke(_INITIAL_STATE, config=config)
+    final = graph.invoke(Command(resume=False), config=config)
+
+    assert final["decision"] is False
+    conn.close()
