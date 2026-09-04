@@ -32,7 +32,7 @@ src/meridian/
   redaction/        Phase 6 — call-time PII tokenization for external API calls
   indexing/         Phase 7 — structure-aware chunking, embeddings, hybrid search
   query/            Phase 8 — retrieval, rerank, grounded generation with citations
-  knowledge_graph/  Phase 9 — entity extraction & cross-source linking
+  entity_graph/     Phase 9 — entity extraction & cross-source linking
   digest/           Phase 10 — LangGraph digest pipeline with human-in-the-loop approval
   security/         Phase 11 — audit logging, scoped keys, encrypted storage, validation
   common/           shared utilities (logging, config, metrics) used across phases
@@ -47,9 +47,10 @@ tests/              eval harness & unit tests (Phase 12+)
 
 Phase 1 (Google OAuth), Phase 2 (Gmail ingestion), Phase 3 (Calendar
 ingestion), Phase 4 (Docs ingestion), Phase 5 (local files ingestion),
-Phase 6 (redaction/tokenization engine), Phase 7 (indexing), and Phase 8
-(query) are implemented. Phases are built and confirmed one at a time;
-see `CLAUDE.md` in this repo for the working agreement.
+Phase 6 (redaction/tokenization engine), Phase 7 (indexing), Phase 8
+(query), and Phase 9 (entity graph) are implemented. Phases are built
+and confirmed one at a time; see `CLAUDE.md` in this repo for the
+working agreement.
 
 ## Setup
 
@@ -302,3 +303,53 @@ A test that makes a real (paid) Claude API call exists
 (`tests/query/test_answer_real.py`) but only runs if you explicitly set
 `MERIDIAN_RUN_LIVE_LLM_TESTS=1` in addition to `LLM_API_KEY` — it's
 skipped by default so the regular test suite never spends real money.
+
+### Phase 9 (Entity graph)
+
+No Google auth needed for this run itself — operates on data already
+ingested/indexed by earlier phases. Run after Phase 7 (indexing) has run
+at least once:
+
+```
+python -m meridian.entity_graph
+```
+
+Answers "who/what is mentioned, and where else does it show up" by
+combining two passes per source:
+
+- A **structured pass** (Gmail and Calendar only) reads each source's own
+  raw ingestion data directly — Gmail's sender/recipient headers, and
+  Calendar's organizer/attendee email addresses — since these carry real
+  identity information (email addresses) that never made it into the
+  search index.
+- An **NER pass** (all four sources) runs local entity recognition
+  (spaCy's `en_core_web_lg` — the same model already required for Phase
+  6, used directly rather than through Presidio, since Presidio has no
+  organization/place recognizer) over every indexed chunk, extracting
+  people, organizations, places, and events mentioned in the text.
+
+A person mentioned by name in free text (a Doc, a Gmail body, a note) is
+linked back to an already-known email-backed person when the names match
+exactly — this is how the same "Jane Doe" showing up as a Gmail sender,
+a Calendar attendee, and a name mentioned in a Google Doc all resolve to
+one entity instead of three. Both passes are incremental (re-running only
+processes what changed) and dead-letter safe (a chunk that breaks NER is
+logged and skipped, never crashing the run).
+
+Pass `--source gmail` (repeatable) to limit extraction to specific
+sources, or `--full-reextract` to reprocess everything regardless of what
+changed. Stores everything in `data/entity_graph/entity_graph.db`.
+
+Inspect what got stored:
+
+```
+sqlite3 data/entity_graph/entity_graph.db "select entity_type, count(*) from entities group by entity_type;"
+sqlite3 data/entity_graph/entity_graph.db "select entity_id, display_name from entities e where (select count(distinct source) from entity_mentions m where m.entity_id = e.entity_id) > 1;"
+```
+
+Known limitations, both documented in code rather than solved: name
+matching is exact (after lowercasing/whitespace collapse) with no fuzzy
+matching, so "Jon Smith" won't link to "John Smith"; and two different
+real people who happen to share an exact name will incorrectly merge
+into one entity. Both are reasonable trade-offs for a personal-scale tool
+without pulling in a fuzzy-matching dependency.

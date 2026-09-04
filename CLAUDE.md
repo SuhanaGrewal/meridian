@@ -38,7 +38,7 @@ own.
 6. `redaction/` — PII scrubbing, applied uniformly across all sources
 7. `indexing/` — structure-aware chunking, local embeddings, hybrid search
 8. `query/` — retrieve, rerank, generate grounded answers with citations
-9. `knowledge_graph/` — entity extraction, cross-source linking
+9. `entity_graph/` — entity extraction, cross-source linking
 10. `digest/` — LangGraph stateful workflow with human-in-the-loop approval
 11. `security/` — audit logging, scoped API keys, encrypted local storage, input validation, dependency scanning
 12. `tests/` — eval harness, golden Q&A set, retrieval scoring
