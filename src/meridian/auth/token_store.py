@@ -7,6 +7,8 @@ from pathlib import Path
 from cryptography.fernet import Fernet, InvalidToken
 from google.oauth2.credentials import Credentials
 
+from meridian.security.field_encryption import derive_or_load_key
+
 
 class EncryptedTokenStore:
     """Stores OAuth credentials at rest, encrypted with a locally-generated key."""
@@ -37,13 +39,10 @@ class EncryptedTokenStore:
         self._token_path.unlink(missing_ok=True)
 
     def _get_or_create_key(self) -> bytes:
-        self._auth_dir.mkdir(parents=True, exist_ok=True)
-        if self._key_path.exists():
-            return self._key_path.read_bytes()
-
-        key = Fernet.generate_key()
-        self._write_atomic(self._key_path, key)
-        return key
+        # same key path, same fallback behavior when no passphrase is set
+        # (MERIDIAN_ENCRYPTION_PASSPHRASE) - existing key.bin files and the
+        # tokens they protect keep working unchanged.
+        return derive_or_load_key(self._auth_dir, key_filename="key.bin")
 
     @staticmethod
     def _write_atomic(path: Path, data: bytes) -> None:
