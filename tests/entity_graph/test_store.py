@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from meridian.entity_graph.store import EntityGraphStore
 
 
@@ -133,3 +135,46 @@ def test_count_cross_source_entities(tmp_path):
     store.add_mention("PERSON:email:bob@example.com", "gmail", "msg-2", None, "Bob", "structured")
 
     assert store.count_cross_source_entities() == 1
+
+
+def test_list_entities_mentioned_since_excludes_mentions_before_cutoff(tmp_path):
+    store = EntityGraphStore(tmp_path / "entity_graph.db")
+    store.upsert_entity("PERSON:name:old person", "PERSON", "name:old person", "Old Person")
+    store.add_mention("PERSON:name:old person", "gmail", "msg-1", None, "Old Person", "ner")
+
+    cutoff = datetime.now(tz=timezone.utc).isoformat()
+
+    store.upsert_entity("PERSON:name:new person", "PERSON", "name:new person", "New Person")
+    store.add_mention("PERSON:name:new person", "gmail", "msg-2", None, "New Person", "ner")
+
+    rows = store.list_entities_mentioned_since(cutoff)
+
+    assert {row["entity_id"] for row in rows} == {"PERSON:name:new person"}
+
+
+def test_list_entities_mentioned_since_orders_by_mention_count_desc(tmp_path):
+    store = EntityGraphStore(tmp_path / "entity_graph.db")
+    cutoff = datetime.now(tz=timezone.utc).isoformat()
+    store.upsert_entity("PERSON:name:popular", "PERSON", "name:popular", "Popular")
+    store.upsert_entity("PERSON:name:rare", "PERSON", "name:rare", "Rare")
+    store.add_mention("PERSON:name:popular", "gmail", "msg-1", None, "Popular", "ner")
+    store.add_mention("PERSON:name:popular", "gmail", "msg-2", None, "Popular", "ner")
+    store.add_mention("PERSON:name:rare", "gmail", "msg-3", None, "Rare", "ner")
+
+    rows = store.list_entities_mentioned_since(cutoff)
+
+    assert [row["entity_id"] for row in rows] == ["PERSON:name:popular", "PERSON:name:rare"]
+    assert rows[0]["mention_count"] == 2
+
+
+def test_list_entities_mentioned_since_respects_limit(tmp_path):
+    store = EntityGraphStore(tmp_path / "entity_graph.db")
+    cutoff = datetime.now(tz=timezone.utc).isoformat()
+    for i in range(3):
+        entity_id = f"PERSON:name:person {i}"
+        store.upsert_entity(entity_id, "PERSON", f"name:person {i}", f"Person {i}")
+        store.add_mention(entity_id, "gmail", f"msg-{i}", None, f"Person {i}", "ner")
+
+    rows = store.list_entities_mentioned_since(cutoff, limit=2)
+
+    assert len(rows) == 2

@@ -152,3 +152,9 @@ class GmailStore:
 
     def get_all_messages(self) -> list[sqlite3.Row]:
         return self._conn.execute("SELECT * FROM messages WHERE is_deleted = 0").fetchall()
+
+    def list_messages_since(self, since: str) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM messages WHERE updated_at >= ? AND is_deleted = 0 ORDER BY sent_at",
+            (since,),
+        ).fetchall()

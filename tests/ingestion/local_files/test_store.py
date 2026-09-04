@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from meridian.ingestion.local_files.note_parser import ParsedNote
 from meridian.ingestion.local_files.store import NotesStore
 
@@ -140,3 +142,25 @@ def test_count_notes(tmp_path):
     store.upsert_note(_note(path="b.txt"))
 
     assert store.count_notes() == 2
+
+
+def test_list_notes_updated_since_excludes_notes_updated_before_cutoff(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+    store.upsert_note(_note(path="old.txt"))
+    cutoff = datetime.now(tz=timezone.utc).isoformat()
+    store.upsert_note(_note(path="new.txt"))
+
+    rows = store.list_notes_updated_since(cutoff)
+
+    assert {row["path"] for row in rows} == {"new.txt"}
+
+
+def test_list_notes_updated_since_excludes_deleted_notes(tmp_path):
+    store = NotesStore(tmp_path / "local_files.db")
+    cutoff = datetime.now(tz=timezone.utc).isoformat()
+    store.upsert_note(_note(path="a.txt"))
+    store.mark_deleted("a.txt")
+
+    rows = store.list_notes_updated_since(cutoff)
+
+    assert rows == []

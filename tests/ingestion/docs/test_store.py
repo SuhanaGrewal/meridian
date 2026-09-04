@@ -141,3 +141,23 @@ def test_count_documents(tmp_path):
     store.upsert_document(_doc(doc_id="doc-2"))
 
     assert store.count_documents() == 2
+
+
+def test_list_docs_modified_since_filters_by_modified_time(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(_doc(doc_id="doc-old", modified_time="2024-01-01T00:00:00.000Z"))
+    store.upsert_document(_doc(doc_id="doc-new", modified_time="2024-06-05T00:00:00.000Z"))
+
+    rows = store.list_docs_modified_since("2024-06-01T00:00:00.000Z")
+
+    assert {row["doc_id"] for row in rows} == {"doc-new"}
+
+
+def test_list_docs_modified_since_excludes_trashed_docs(tmp_path):
+    store = DocsStore(tmp_path / "docs.db")
+    store.upsert_document(_doc(doc_id="doc-1", modified_time="2024-06-05T00:00:00.000Z"))
+    store.mark_trashed("doc-1")
+
+    rows = store.list_docs_modified_since("2024-06-01T00:00:00.000Z")
+
+    assert rows == []

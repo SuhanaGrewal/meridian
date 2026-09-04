@@ -166,3 +166,24 @@ def test_get_all_events_returns_every_non_deleted_event(tmp_path):
 
     assert len(rows) == 1
     assert rows[0]["event_id"] == "evt-1"
+
+
+def test_list_events_upcoming_filters_to_the_given_window(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.upsert_event(_event(event_id="evt-past", start_at="2024-01-01T00:00:00Z"))
+    store.upsert_event(_event(event_id="evt-in-window", start_at="2024-06-05T00:00:00Z"))
+    store.upsert_event(_event(event_id="evt-far-future", start_at="2024-12-01T00:00:00Z"))
+
+    rows = store.list_events_upcoming("2024-06-01T00:00:00Z", "2024-06-10T00:00:00Z")
+
+    assert {row["event_id"] for row in rows} == {"evt-in-window"}
+
+
+def test_list_events_upcoming_excludes_deleted_events(tmp_path):
+    store = CalendarStore(tmp_path / "calendar.db")
+    store.upsert_event(_event(event_id="evt-1", start_at="2024-06-05T00:00:00Z"))
+    store.mark_deleted("primary", "evt-1")
+
+    rows = store.list_events_upcoming("2024-06-01T00:00:00Z", "2024-06-10T00:00:00Z")
+
+    assert rows == []

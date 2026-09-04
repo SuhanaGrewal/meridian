@@ -179,3 +179,9 @@ class CalendarStore:
 
     def get_all_events(self) -> list[sqlite3.Row]:
         return self._conn.execute("SELECT * FROM events WHERE is_deleted = 0").fetchall()
+
+    def list_events_upcoming(self, min_start_at: str, max_start_at: str) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM events WHERE start_at BETWEEN ? AND ? AND is_deleted = 0 ORDER BY start_at",
+            (min_start_at, max_start_at),
+        ).fetchall()

@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from meridian.ingestion.gmail.message_parser import ParsedMessage
 from meridian.ingestion.gmail.store import GmailStore
 
@@ -112,3 +114,25 @@ def test_get_all_messages_returns_every_non_deleted_message(tmp_path):
 
     assert len(rows) == 1
     assert rows[0]["message_id"] == "msg-1"
+
+
+def test_list_messages_since_excludes_messages_updated_before_cutoff(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(_message(message_id="msg-old"))
+    cutoff = datetime.now(tz=timezone.utc).isoformat()
+    store.upsert_message(_message(message_id="msg-new"))
+
+    rows = store.list_messages_since(cutoff)
+
+    assert {row["message_id"] for row in rows} == {"msg-new"}
+
+
+def test_list_messages_since_excludes_deleted_messages(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    cutoff = datetime.now(tz=timezone.utc).isoformat()
+    store.upsert_message(_message(message_id="msg-1"))
+    store.mark_deleted("msg-1")
+
+    rows = store.list_messages_since(cutoff)
+
+    assert rows == []

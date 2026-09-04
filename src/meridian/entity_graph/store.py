@@ -168,6 +168,20 @@ class EntityGraphStore:
             "SELECT COUNT(*) FROM entity_mentions WHERE mention_kind = ?", (mention_kind,)
         ).fetchone()[0]
 
+    def list_entities_mentioned_since(self, since: str, *, limit: int = 10) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """
+            SELECT e.entity_id, e.entity_type, e.display_name, COUNT(*) AS mention_count
+            FROM entity_mentions m
+            JOIN entities e ON e.entity_id = m.entity_id
+            WHERE m.created_at >= ?
+            GROUP BY e.entity_id
+            ORDER BY mention_count DESC
+            LIMIT ?
+            """,
+            (since, limit),
+        ).fetchall()
+
     def count_cross_source_entities(self) -> int:
         return self._conn.execute(
             """

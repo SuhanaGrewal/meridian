@@ -107,3 +107,9 @@ class NotesStore:
 
     def count_notes(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+
+    def list_notes_updated_since(self, since: str) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM notes WHERE updated_at >= ? AND is_deleted = 0 ORDER BY updated_at",
+            (since,),
+        ).fetchall()

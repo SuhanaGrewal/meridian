@@ -131,3 +131,9 @@ class DocsStore:
 
     def count_documents(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+
+    def list_docs_modified_since(self, since: str) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM documents WHERE modified_time >= ? AND is_trashed = 0 ORDER BY modified_time",
+            (since,),
+        ).fetchall()
