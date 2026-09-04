@@ -14,6 +14,7 @@ def _make_config(tmp_path) -> Config:
         google_client_id="client-id",
         google_client_secret="client-secret",
         llm_api_key="",
+        llm_model="claude-haiku-4-5",
     )
 
 

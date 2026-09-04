@@ -15,6 +15,7 @@ class Config:
     google_client_id: str
     google_client_secret: str
     llm_api_key: str
+    llm_model: str
 
     @property
     def auth_dir(self) -> Path:
@@ -42,6 +43,7 @@ def load_config(*, load_env_file=True) -> Config:
         google_client_id=os.environ.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         google_client_secret=os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         llm_api_key=os.environ.get("LLM_API_KEY", ""),
+        llm_model=os.environ.get("LLM_MODEL", "claude-haiku-4-5"),
     )
 
 

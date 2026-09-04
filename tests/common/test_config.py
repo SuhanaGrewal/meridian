@@ -14,6 +14,7 @@ def test_load_config_maps_env_vars_to_paths(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "client-id")
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "client-secret")
     monkeypatch.setenv("LLM_API_KEY", "llm-key")
+    monkeypatch.setenv("LLM_MODEL", "claude-sonnet-5")
 
     config = load_config(load_env_file=False)
 
@@ -26,6 +27,15 @@ def test_load_config_maps_env_vars_to_paths(tmp_path, monkeypatch):
     assert config.google_client_id == "client-id"
     assert config.google_client_secret == "client-secret"
     assert config.llm_api_key == "llm-key"
+    assert config.llm_model == "claude-sonnet-5"
+
+
+def test_load_config_defaults_llm_model(monkeypatch):
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+
+    config = load_config(load_env_file=False)
+
+    assert config.llm_model == "claude-haiku-4-5"
 
 
 def test_load_config_defaults_notes_folder_to_none(monkeypatch):
