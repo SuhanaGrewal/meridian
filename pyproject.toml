@@ -13,6 +13,7 @@ dependencies = [
     "presidio-analyzer>=2.2",
     "sentence-transformers>=3.0",
     "anthropic>=1.0",
+    "spacy>=3.8",
 ]
 
 [project.optional-dependencies]

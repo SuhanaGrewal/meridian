@@ -29,6 +29,10 @@ class Config:
     def indexing_dir(self) -> Path:
         return self.data_dir / "indexing"
 
+    @property
+    def entity_graph_dir(self) -> Path:
+        return self.data_dir / "entity_graph"
+
 
 def load_config(*, load_env_file=True) -> Config:
     if load_env_file:
@@ -53,3 +57,4 @@ def ensure_dirs(config: Config) -> None:
     config.auth_dir.mkdir(parents=True, exist_ok=True)
     config.ingestion_dir.mkdir(parents=True, exist_ok=True)
     config.indexing_dir.mkdir(parents=True, exist_ok=True)
+    config.entity_graph_dir.mkdir(parents=True, exist_ok=True)
