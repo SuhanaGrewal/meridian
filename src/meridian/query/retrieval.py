@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
+import numpy as np
+
+from meridian.indexing.hybrid_search import hybrid_search
 from meridian.indexing.store import IndexStore
 from meridian.query.date_range import chunk_in_range
+from meridian.query.reranker import rerank
 
 AbstainReason = Literal["no_candidates", "no_candidates_in_date_range", "low_confidence"]
 
@@ -62,3 +67,73 @@ def _fetch_and_filter_candidates(
         deduped.append(row)
 
     return deduped
+
+
+def retrieve(
+    store: IndexStore,
+    question: str,
+    question_embedding: np.ndarray,
+    *,
+    reranker: Any,
+    date_range: tuple | None = None,
+    source: str | None = None,
+    logger: logging.Logger | None = None,
+    initial_pool_k: int = 25,
+    rerank_pool: int = 10,
+    top_k: int = 5,
+    abstain_threshold: float = 0.5,
+) -> RetrievalResult:
+    """the full retrieval pipeline: hybrid search for an initial candidate
+    pool, resolve/date-filter/dedup to parent-level candidates, rerank on
+    parent_text (the same text that grounds the final answer), keep the
+    top_k, and abstain if the single best match isn't confident enough."""
+    fused = hybrid_search(store, question, question_embedding, k=initial_pool_k, source=source)
+    if not fused:
+        return RetrievalResult(chunks=[], confidence=0.0, abstained=True, abstain_reason="no_candidates")
+
+    chunk_ids = [chunk_id for chunk_id, _ in fused]
+    candidates = _fetch_and_filter_candidates(store, chunk_ids, date_range)
+
+    if not candidates:
+        reason = "no_candidates_in_date_range" if date_range is not None else "no_candidates"
+        return RetrievalResult(chunks=[], confidence=0.0, abstained=True, abstain_reason=reason)
+
+    pool = candidates[:rerank_pool]
+    scores = rerank(reranker, question, [row["parent_text"] for row in pool])
+
+    ranked = sorted(zip(pool, scores), key=lambda item: item[1], reverse=True)[:top_k]
+
+    chunks = [
+        RetrievedChunk(
+            chunk_id=row["chunk_id"],
+            source=row["source"],
+            source_item_id=row["source_item_id"],
+            parent_text=row["parent_text"],
+            metadata=json.loads(row["metadata_json"]),
+            confidence=score,
+        )
+        for row, score in ranked
+    ]
+
+    top_confidence = chunks[0].confidence if chunks else 0.0
+    abstained = top_confidence < abstain_threshold
+
+    if logger is not None:
+        logger.info(
+            "query retrieval complete",
+            extra={
+                "operation": "query.retrieve",
+                "status": "success",
+                "duration_ms": 0,
+                "candidates_found": len(candidates),
+                "top_confidence": top_confidence,
+                "abstained": abstained,
+            },
+        )
+
+    return RetrievalResult(
+        chunks=chunks,
+        confidence=top_confidence,
+        abstained=abstained,
+        abstain_reason="low_confidence" if abstained else None,
+    )
