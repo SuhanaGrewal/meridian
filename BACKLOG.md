@@ -118,21 +118,6 @@ in whatever review flow surfaces these (today's `digest review
 explicit go-ahead before starting, not just folding into a larger feature
 bundle.
 
-### 15. Merge context across threads about the same thing or person
-Requested (Inbox Intelligence): recognize that several differently-subject-
-lined threads are actually about the same topic or person, and merge that
-context.
-What it'd take:
-- For "same person": `entity_graph` (Phase 9) already does cross-source
-  identity resolution - this part may already be substantially covered,
-  worth checking against real data before building anything new.
-- For "same topic" (e.g. three threads with different subjects that are
-  all actually about the Q3 budget): a genuinely new capability - topic
-  clustering/deduplication across threads, not just entity identity. No
-  existing mechanism in this codebase does this; would need real scoping
-  (embedding-similarity clustering? LLM-judged? at what threshold?) before
-  starting.
-
 ### 12. Calendar notifications
 Requested: proactive alerts (e.g. "meeting in 15 minutes"), not just
 seeing upcoming events in a digest. Different from a periodic sync/digest
@@ -171,6 +156,47 @@ Also: `digest/gather.py` gained a synthetic count item ("N additional
 email(s) arrived in Promotions/Social/Updates/Forums") since the digest
 now fully excludes those categories (#16) and had no way left to mention
 how many arrived - requested separately, alongside #16.
+
+### 15. Merge context across threads about the same thing or person
+Requested (Inbox Intelligence): recognize that several differently-subject-
+lined threads are actually about the same topic or person, and merge that
+context. "Same person" was already covered by `entity_graph` (Phase 9)'s
+cross-source identity resolution. "Same topic" needed a genuinely new
+capability - and a flat entity/lookup table wasn't enough for it (per
+explicit correction while scoping this): it needed real graph nodes and
+edges so cross-item context can be *traversed*, not just joined.
+
+Built a small generic graph directly in `entity_graph/store.py`, additive
+to the existing `entities`/`entity_mentions` tables, not a replacement:
+- `topics` table: a topic node (`topic_id`, a short LLM-generated `label`,
+  and an embedding).
+- `graph_edges` table: typed, directional edges between plain string node
+  references (`item:<source>:<id>`, `topic:<topic_id>`) - a node reference
+  is just a string rather than a foreign key into one specific table, so
+  one table covers edges between any two node kinds without a join table
+  per combination.
+- `EntityGraphStore.items_sharing_topic_with(source, item_id)`: a real
+  2-hop graph traversal (item -> topic -> other items) - a plain lookup
+  against edges already recorded, not a fresh similarity computation on
+  every call.
+
+New `entity_graph/topic_graph.py::link_item_to_topic()` links one item to
+a topic node: brute-force cosine similarity (reusing
+`indexing/vector_search.py::cosine_similarity_top_k`, the same approach
+already used for retrieval) against existing topic embeddings first - if
+one is a close enough match (similarity >= 0.6), reuse it; otherwise mint
+a new topic node labeled by one Claude call. New
+`orchestrator.py::run_topic_pass()` mirrors `run_ner_pass()`'s incremental
+per-item structure (change-signal tracking, stale-item cleanup, a failing
+item logged and skipped rather than crashing the run) using each item's
+first indexed chunk as its representative text/embedding.
+
+Costs a real LLM call per not-yet-linked item, so - unlike the rest of
+`entity_graph`'s free default run - this is opt-in via
+`python -m meridian.entity_graph --link-topics`. Verified against real
+data: a local note about an upcoming Lisbon trip was correctly labeled
+"Lisbon October trip planning" and linked; a re-run correctly skipped it
+as unchanged with no further LLM call.
 
 ### 17. Natural-language router: "everything is a text message"
 Requested: instead of separate CLI subcommands per capability, a single

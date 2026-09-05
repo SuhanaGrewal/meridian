@@ -348,6 +348,27 @@ sqlite3 data/entity_graph/entity_graph.db "select entity_type, count(*) from ent
 sqlite3 data/entity_graph/entity_graph.db "select entity_id, display_name from entities e where (select count(distinct source) from entity_mentions m where m.entity_id = e.entity_id) > 1;"
 ```
 
+#### Topic graph (cross-thread context, opt-in)
+
+`entities`/`entity_mentions` above link items that mention the same
+*person*. A separate, additive `topics`/`graph_edges` pair of tables
+answers a different question: which items are about the same *subject*,
+even across differently-worded threads with no person in common (three
+emails about "the Q3 budget" with three different subject lines, say).
+Each item is linked to a topic node — an existing one if its embedding is
+a close enough match, otherwise a new one labeled by one Claude call — and
+`EntityGraphStore.items_sharing_topic_with(source, item_id)` traverses the
+recorded edges (item → topic → other items) to answer "what else is about
+this."
+
+This costs a real LLM call per not-yet-linked item, so it's opt-in:
+
+```
+python -m meridian.entity_graph --link-topics
+```
+
+Combine with `--source` to scope it (e.g. `--source docs --link-topics`).
+
 Known limitations, both documented in code rather than solved: name
 matching is exact (after lowercasing/whitespace collapse) with no fuzzy
 matching, so "Jon Smith" won't link to "John Smith"; and two different

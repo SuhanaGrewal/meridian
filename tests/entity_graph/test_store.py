@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import numpy as np
+
 from meridian.entity_graph.store import EntityGraphStore
 
 
@@ -178,3 +180,57 @@ def test_list_entities_mentioned_since_respects_limit(tmp_path):
     rows = store.list_entities_mentioned_since(cutoff, limit=2)
 
     assert len(rows) == 2
+
+
+def test_add_topic_and_get_topic(tmp_path):
+    store = EntityGraphStore(tmp_path / "entity_graph.db")
+
+    store.add_topic("topic-1", "Q3 budget planning", np.array([1.0, 0.0, 0.0], dtype=np.float32))
+
+    row = store.get_topic("topic-1")
+    assert row["label"] == "Q3 budget planning"
+    assert np.frombuffer(row["embedding"], dtype=np.float32).tolist() == [1.0, 0.0, 0.0]
+
+
+def test_list_topics_with_embeddings_and_count_topics(tmp_path):
+    store = EntityGraphStore(tmp_path / "entity_graph.db")
+    store.add_topic("topic-1", "Budget", np.zeros(3, dtype=np.float32))
+    store.add_topic("topic-2", "Hiring", np.zeros(3, dtype=np.float32))
+
+    rows = store.list_topics_with_embeddings()
+
+    assert store.count_topics() == 2
+    assert {row["topic_id"] for row in rows} == {"topic-1", "topic-2"}
+
+
+def test_add_graph_edge_is_idempotent(tmp_path):
+    store = EntityGraphStore(tmp_path / "entity_graph.db")
+
+    store.add_graph_edge("item:gmail:msg-1", "topic:topic-1", "about_topic")
+    store.add_graph_edge("item:gmail:msg-1", "topic:topic-1", "about_topic")
+
+    assert store.nodes_related_via("item:gmail:msg-1", "about_topic") == ["topic:topic-1"]
+
+
+def test_items_sharing_topic_with_finds_other_item_via_shared_topic(tmp_path):
+    store = EntityGraphStore(tmp_path / "entity_graph.db")
+    store.add_graph_edge("item:gmail:msg-1", "topic:topic-1", "about_topic")
+    store.add_graph_edge("item:calendar:evt-1", "topic:topic-1", "about_topic")
+    store.add_graph_edge("item:gmail:msg-2", "topic:topic-2", "about_topic")
+
+    related = store.items_sharing_topic_with("gmail", "msg-1")
+
+    assert related == [("calendar", "evt-1")]
+
+
+def test_items_sharing_topic_with_returns_empty_when_item_has_no_topic(tmp_path):
+    store = EntityGraphStore(tmp_path / "entity_graph.db")
+
+    assert store.items_sharing_topic_with("gmail", "msg-unlinked") == []
+
+
+def test_items_sharing_topic_with_excludes_the_item_itself(tmp_path):
+    store = EntityGraphStore(tmp_path / "entity_graph.db")
+    store.add_graph_edge("item:gmail:msg-1", "topic:topic-1", "about_topic")
+
+    assert store.items_sharing_topic_with("gmail", "msg-1") == []

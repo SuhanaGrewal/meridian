@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from meridian.entity_graph.identity import (
     PersonIdentity,
     normalize_text,
@@ -19,6 +21,7 @@ from meridian.entity_graph.identity import (
 )
 from meridian.entity_graph.ner import DEFAULT_ENTITY_TYPES, extract_entities
 from meridian.entity_graph.store import EntityGraphStore
+from meridian.entity_graph.topic_graph import link_item_to_topic
 from meridian.indexing.store import IndexStore
 from meridian.ingestion.calendar.store import CalendarStore
 from meridian.ingestion.gmail.store import GmailStore
@@ -234,6 +237,87 @@ def run_ner_pass(
             "entity_graph NER pass complete",
             extra={
                 "operation": "entity_graph.ner",
+                "status": "success",
+                "duration_ms": stats.duration_ms,
+                "source": source,
+            },
+        )
+    return stats
+
+
+def run_topic_pass(
+    source: str,
+    index_store: IndexStore,
+    entity_store: EntityGraphStore,
+    *,
+    client: Any,
+    model: str,
+    analyzer: Any,
+    force: bool = False,
+    logger: logging.Logger | None = None,
+    audit_log_dir: Path | None = None,
+) -> EntityGraphStats:
+    """links each item to a topic node (entity_graph/topic_graph.py) so
+    EntityGraphStore.items_sharing_topic_with() can later answer "what else
+    is about this" via a graph traversal, not a fresh entity-overlap query
+    - this is what makes cross-thread context merging real for items that
+    share a subject but no common person/org entity. Uses only the first
+    indexed chunk per item as that item's representative text/embedding -
+    good enough for topic assignment, unlike NER which needs every chunk -
+    keeping this to at most one Claude call per not-yet-linked item. Costs
+    a real LLM call per new item, so unlike run_ner_pass this is opt-in
+    (see --link-topics in entity_graph/__main__.py), not part of the free
+    default run."""
+    stats = EntityGraphStats()
+    start = time.monotonic()
+
+    rows = index_store.get_chunks_with_embeddings(source)
+    items: dict[str, list[Any]] = defaultdict(list)
+    for row in rows:
+        items[row["source_item_id"]].append(row)
+
+    for stale_id in entity_store.get_processed_item_ids(source, "topic") - set(items):
+        entity_store.clear_processed(source, stale_id, "topic")
+        stats.items_deleted += 1
+
+    for item_id, item_rows in items.items():
+        current_signal = index_store.get_change_signal(source, item_id) or ""
+        if not force and entity_store.get_change_signal(source, item_id, "topic") == current_signal:
+            stats.items_skipped_unchanged += 1
+            continue
+
+        representative = item_rows[0]
+        embedding = np.frombuffer(representative["embedding"], dtype=np.float32)
+        try:
+            link_item_to_topic(
+                source, item_id, representative["parent_text"], embedding, entity_store,
+                client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir,
+            )
+        except Exception:
+            if logger is not None:
+                logger.warning(
+                    "entity_graph topic pass failed on item, skipping",
+                    extra={
+                        "operation": "entity_graph.topic",
+                        "status": "error",
+                        "duration_ms": 0,
+                        "source": source,
+                        "source_item_id": item_id,
+                    },
+                    exc_info=True,
+                )
+            stats.chunks_failed += 1
+            continue
+
+        entity_store.set_processed(source, item_id, "topic", current_signal)
+        stats.items_processed += 1
+
+    stats.duration_ms = (time.monotonic() - start) * 1000
+    if logger is not None:
+        logger.info(
+            "entity_graph topic pass complete",
+            extra={
+                "operation": "entity_graph.topic",
                 "status": "success",
                 "duration_ms": stats.duration_ms,
                 "source": source,

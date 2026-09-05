@@ -1,6 +1,6 @@
 import numpy as np
 
-from meridian.entity_graph.orchestrator import run_extraction
+from meridian.entity_graph.orchestrator import run_extraction, run_topic_pass
 from meridian.entity_graph.store import EntityGraphStore
 from meridian.indexing.parent_child import ChunkRecord
 from meridian.indexing.store import IndexStore
@@ -75,12 +75,12 @@ def _event(
     )
 
 
-def _seed_doc_chunk(index_store, doc_id, text):
+def _seed_doc_chunk(index_store, doc_id, text, embedding=None):
     index_store.upsert_item_chunks(
         "docs",
         doc_id,
         [ChunkRecord(text=text, parent_text=text, position=0, is_own_parent=True)],
-        [np.zeros(4, dtype=np.float32)],
+        [np.zeros(4, dtype=np.float32) if embedding is None else embedding],
         {"title": doc_id},
     )
 
@@ -218,3 +218,89 @@ def test_stale_gmail_message_deleted_upstream_is_reconciled(tmp_path):
 
     assert results["gmail"].items_deleted == 1
     assert entity_store.count_mentions("structured") == 0
+
+
+class _FakeAnalyzer:
+    def analyze(self, text, entities, language):
+        return []
+
+
+class _FakeMessages:
+    def __init__(self, replies):
+        self._replies = list(replies)
+
+    def create(self, **kwargs):
+        return _FakeResponse(self._replies.pop(0))
+
+
+class _FakeResponse:
+    def __init__(self, text):
+        self.content = [_FakeTextBlock(text)]
+
+
+class _FakeTextBlock:
+    def __init__(self, text):
+        self.type = "text"
+        self.text = text
+
+
+class _FakeClient:
+    def __init__(self, replies):
+        self.messages = _FakeMessages(replies)
+
+
+def test_run_topic_pass_links_two_docs_to_the_same_topic(tmp_path):
+    index_store = IndexStore(tmp_path / "index.db")
+    same_embedding = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    _seed_doc_chunk(index_store, "doc-1", "Q3 budget planning notes", embedding=same_embedding)
+    _seed_doc_chunk(index_store, "doc-2", "More Q3 budget planning notes", embedding=same_embedding)
+    entity_store = EntityGraphStore(tmp_path / "entity_graph.db")
+    # only one reply queued - the second item matches the first topic by
+    # embedding similarity, so it never needs its own LLM call.
+    client = _FakeClient(["Q3 budget planning"])
+
+    stats = run_topic_pass(
+        "docs", index_store, entity_store, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer()
+    )
+
+    assert stats.items_processed == 2
+    assert entity_store.count_topics() == 1
+    assert entity_store.items_sharing_topic_with("docs", "doc-1") == [("docs", "doc-2")]
+
+
+def test_run_topic_pass_incremental_rerun_skips_unchanged_items(tmp_path):
+    index_store = IndexStore(tmp_path / "index.db")
+    _seed_doc_chunk(index_store, "doc-1", "Q3 budget planning notes", embedding=np.array([1.0, 0.0], dtype=np.float32))
+    entity_store = EntityGraphStore(tmp_path / "entity_graph.db")
+
+    run_topic_pass(
+        "docs", index_store, entity_store,
+        client=_FakeClient(["Q3 budget planning"]), model="claude-haiku-4-5", analyzer=_FakeAnalyzer(),
+    )
+    second = run_topic_pass(
+        "docs", index_store, entity_store,
+        client=_FakeClient([]), model="claude-haiku-4-5", analyzer=_FakeAnalyzer(),
+    )
+
+    assert second.items_skipped_unchanged == 1
+    assert second.items_processed == 0
+
+
+def test_run_topic_pass_item_that_raises_does_not_crash_the_run(tmp_path):
+    index_store = IndexStore(tmp_path / "index.db")
+    _seed_doc_chunk(index_store, "doc-bad", "this one breaks the llm call", embedding=np.array([1.0, 0.0], dtype=np.float32))
+    _seed_doc_chunk(index_store, "doc-good", "Q3 budget planning notes", embedding=np.array([0.0, 1.0], dtype=np.float32))
+    entity_store = EntityGraphStore(tmp_path / "entity_graph.db")
+    # both items have distinct embeddings (no existing topic to match), so
+    # each needs its own LLM call to mint a new topic - only one reply is
+    # queued, so whichever item is processed second finds the queue empty
+    # and raises, simulating a real per-item failure without crashing the
+    # whole pass.
+    client = _FakeClient(["Q3 budget planning"])
+
+    stats = run_topic_pass(
+        "docs", index_store, entity_store, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer()
+    )
+
+    assert stats.chunks_failed == 1
+    assert stats.items_processed == 1
