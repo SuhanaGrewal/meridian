@@ -613,8 +613,32 @@ runs (whether a fresh backfill or an incremental sync), no separate setup
 step. If you see "Account email not captured yet," just run the gmail sync
 once first.
 
-This is the first of several inbox-intelligence capabilities being built
-incrementally - tracking soft commitments buried in prose ("I'll send this
-by Friday"), merging context across threads about the same thing/person,
-and drafting replies in your voice are tracked in `BACKLOG.md`, not yet
-built.
+**Soft-commitment tracking** - detects a promise the sender of an email
+makes about their own future action ("I'll send this by Friday") and
+converts it into a trackable follow-up. Unlike stale-threads, this makes
+real Claude calls (redacted first, audit-logged, same as `query`/`digest`)
+so it's a separate opt-in step, bounded by `--limit`:
+
+```
+python -m meridian.inbox_intelligence scan-commitments --limit 25
+python -m meridian.inbox_intelligence commitments
+python -m meridian.inbox_intelligence resolve-commitment <commitment_id>
+```
+
+`scan-commitments` only looks at messages it hasn't scanned before
+(tracked in `data/inbox_intelligence/commitments.db`), skips
+promotional/social/updates/forums mail and auto-replies before ever
+calling the LLM, and only extracts commitments the sender made about
+themselves (covers both directions across your mailbox, since you show up
+as sender on outgoing mail and recipient on incoming mail). The LLM
+extracts the deadline phrase verbatim (e.g. "by Friday") only - the actual
+date is resolved deterministically in code from the message's real send
+date, not asked of the LLM, since real testing showed LLM date arithmetic
+is unreliable (see the query-recency note above). Absolute date references
+("around the 9th of September") aren't resolved to a due date yet - only
+weekday names and relative-day phrases are; unresolvable phrases show no
+due date rather than a guessed one. `resolve-commitment` is manual only -
+there's no automatic fulfillment detection.
+
+Merging context across threads about the same thing/person, and drafting
+replies in your voice, are tracked in `BACKLOG.md`, not yet built.

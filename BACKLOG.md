@@ -109,26 +109,6 @@ in whatever review flow surfaces these (today's `digest review
 explicit go-ahead before starting, not just folding into a larger feature
 bundle.
 
-### 14. Soft-commitment tracking ("I'll send this by Friday" → trackable follow-up)
-Requested (Inbox Intelligence): detect commitments buried in email prose
-- made by the user or made to the user - and convert them into trackable
-follow-ups with a resolved/unresolved status and a deadline.
-What it'd take:
-- An LLM extraction pass over message bodies (regex won't catch "I'll get
-  this over by end of week" reliably) - needs prompt design, and scoping
-  which messages get scanned (all of them is expensive; newest-first,
-  incrementally, is more realistic).
-- Resolving a relative date phrase ("by Friday," "end of week") against
-  the message's own `sent_at`, not "now" - `query/date_range.py`'s phrases
-  are relative to the current moment, not a historical anchor, so this
-  needs new date-resolution logic, not a direct reuse.
-- A persisted commitments/follow-ups store (new) with a resolved/
-  unresolved status, and a way to check if a commitment got fulfilled
-  (did a matching attachment/reply show up before or after the deadline).
-- Overlaps conceptually with backlog #9 (follow-up tracking on the user's
-  own past questions) - likely the same underlying store, worth designing
-  together rather than as two unrelated systems.
-
 ### 15. Merge context across threads about the same thing or person
 Requested (Inbox Intelligence): recognize that several differently-subject-
 lined threads are actually about the same topic or person, and merge that
@@ -155,6 +135,44 @@ background process or a very frequent scheduled check (e.g. every minute)
 "digest is ready" notification if #5 is ever built.
 
 ## Fixed
+
+### 14. Soft-commitment tracking ("I'll send this by Friday" → trackable follow-up)
+Second piece of Inbox Intelligence. `python -m meridian.inbox_intelligence
+scan-commitments` (costs real LLM usage, bounded by `--limit`) detects a
+promise the SENDER of an email makes about their own future action, and
+converts it into a trackable follow-up; `commitments` lists open ones
+(free); `resolve-commitment <id>` marks one done manually.
+
+Scoped narrower than originally requested: only self-commitments made by
+whoever wrote the email are tracked (covers both directions across a
+mailbox, since the account owner appears as sender on outgoing mail and
+as recipient on incoming mail) - not a general "did anyone commit to
+anything anywhere in this thread" pass. There is no automatic
+fulfillment-detection (checking whether a matching reply/attachment
+actually showed up) - `resolve-commitment` is manual only. Still overlaps
+conceptually with #9 (follow-up tracking on the user's own past
+questions) - not yet unified into one system.
+
+Guardrails from the start: every message is redacted
+(`tokenize_for_external_call`) before the LLM call and untokenized after,
+and every call records an `llm.external_call` audit event. Learned from
+the query-recency fix (item 1, above) that LLM date arithmetic is
+unreliable, so the LLM only extracts the deadline phrase verbatim (e.g.
+"by Friday") and `deadlines.py::resolve_deadline_phrase()` resolves it to
+an actual date deterministically in code, anchored to the message's real
+`sent_at` - unrecognized phrases return no due date rather than guessing.
+
+Real smoke test against real mail found and fixed two concrete bugs: the
+LLM's literal "NONE" deadline output was being stored as that string
+instead of NULL, and a plain request ("please update the tracker") was
+misclassified as a commitment despite the prompt already saying not to
+count requests - tightened the prompt to explicitly test "did the sender
+promise to act themselves, not the recipient." Final real result after
+both fixes: 6 → 4 commitments, all genuine. Known remaining gap: absolute
+date references in prose ("around the 9th of September") aren't resolved
+to a due date - the deterministic resolver only handles weekday names and
+relative-day phrases (tomorrow, next week, in N days, etc.), correctly
+leaving those as "no due date" rather than guessing.
 
 ### 13. Inbox Intelligence: stale-thread detection ("your move")
 First piece of Inbox Intelligence (the "really good RAG + reminders" track,
