@@ -103,16 +103,33 @@ def test_gather_items_gmail_label_includes_sender_and_subject(tmp_path):
     assert "Budget" in gmail_items[0]["label"]
 
 
-def test_gather_items_excludes_promotional_gmail(tmp_path):
+def test_gather_items_excludes_promotional_gmail_but_mentions_the_count(tmp_path):
     gmail_store, calendar_store, docs_store, notes_store, entity_store = _empty_stores(tmp_path)
-    gmail_store.upsert_message(_message(label_ids=["INBOX", "CATEGORY_PROMOTIONS"]))
+    gmail_store.upsert_message(_message(subject="Big Sale", label_ids=["INBOX", "CATEGORY_PROMOTIONS"]))
 
     items = gather_items(
         gmail_store, calendar_store, docs_store, notes_store, entity_store,
         since=_SINCE, now=_NOW, lookahead_end=_LOOKAHEAD_END,
     )
 
-    assert not any(item["source"] == "gmail" for item in items)
+    gmail_items = [item for item in items if item["source"] == "gmail"]
+    assert len(gmail_items) == 1
+    assert not any("Big Sale" in item["label"] for item in gmail_items)
+    assert "1 additional email" in gmail_items[0]["label"]
+
+
+def test_gather_items_no_excluded_summary_when_nothing_was_filtered(tmp_path):
+    gmail_store, calendar_store, docs_store, notes_store, entity_store = _empty_stores(tmp_path)
+    gmail_store.upsert_message(_message(label_ids=["INBOX", "CATEGORY_PERSONAL"]))
+
+    items = gather_items(
+        gmail_store, calendar_store, docs_store, notes_store, entity_store,
+        since=_SINCE, now=_NOW, lookahead_end=_LOOKAHEAD_END,
+    )
+
+    gmail_items = [item for item in items if item["source"] == "gmail"]
+    assert len(gmail_items) == 1
+    assert "additional email" not in gmail_items[0]["label"]
 
 
 def test_gather_items_includes_primary_gmail(tmp_path):
