@@ -43,6 +43,10 @@ class Config:
     def security_dir(self) -> Path:
         return self.data_dir / "security"
 
+    @property
+    def inbox_intelligence_dir(self) -> Path:
+        return self.data_dir / "inbox_intelligence"
+
 
 def load_config(*, load_env_file=True) -> Config:
     if load_env_file:
@@ -76,3 +80,4 @@ def ensure_dirs(config: Config) -> None:
     config.entity_graph_dir.mkdir(parents=True, exist_ok=True)
     config.digest_dir.mkdir(parents=True, exist_ok=True)
     config.security_dir.mkdir(parents=True, exist_ok=True)
+    config.inbox_intelligence_dir.mkdir(parents=True, exist_ok=True)
