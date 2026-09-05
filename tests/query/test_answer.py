@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
+from meridian.conversation.store import ConversationStore
 from meridian.indexing.parent_child import ChunkRecord
 from meridian.indexing.store import IndexStore
 from meridian.query.answer import ask
@@ -362,3 +363,84 @@ def test_ask_backward_looking_query_does_not_fall_back(tmp_path):
 
     assert result.abstained is True
     assert result.abstain_reason == "no_candidates_in_date_range"
+
+
+def test_ask_with_conversation_id_but_empty_thread_skips_rewrite(tmp_path):
+    # a fresh thread has nothing to rewrite against yet - only one LLM
+    # call (the answer itself) should happen, same as a stateless ask().
+    store = IndexStore(tmp_path / "index.db")
+    query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    _seed_high_confidence_chunk(store, "quarterly budget report", query_vec)
+    reranker = _FakeReranker({"quarterly budget report": 10.0})
+    client = _FakeClient("Here's the budget report [1].")
+    conversation_store = ConversationStore(tmp_path / "conversations.db")
+
+    result = ask(
+        "budget report", store=store, embedder=_FakeEmbedder(query_vec), reranker=reranker,
+        analyzer=_FakeAnalyzer(), client=client, model="claude-haiku-4-5", now=_NOW,
+        conversation_id="thread-1", conversation_store=conversation_store,
+    )
+
+    assert result.answer == "Here's the budget report [1]."
+    assert len(client.messages.calls) == 1
+
+
+def test_ask_with_conversation_history_rewrites_followup_first(tmp_path):
+    conversation_store = ConversationStore(tmp_path / "conversations.db")
+    conversation_store.add_turn("thread-1", "user", "what's on my calendar this month")
+    conversation_store.add_turn("thread-1", "assistant", "You have a meeting on the 10th [1].")
+
+    store = IndexStore(tmp_path / "index.db")
+    query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    _seed_high_confidence_chunk(store, "next month's calendar entry", query_vec)
+    reranker = _FakeReranker({"next month's calendar entry": 10.0})
+    client = _FakeMultiReplyClient([
+        "what's on my calendar next month",
+        "You have a meeting on the 3rd of next month [1].",
+    ])
+
+    result = ask(
+        "what about next month", store=store, embedder=_FakeEmbedder(query_vec), reranker=reranker,
+        analyzer=_FakeAnalyzer(), client=client, model="claude-haiku-4-5", now=_NOW,
+        conversation_id="thread-1", conversation_store=conversation_store,
+    )
+
+    assert result.answer == "You have a meeting on the 3rd of next month [1]."
+    assert len(client.messages.calls) == 2
+    rewrite_call_content = client.messages.calls[0]["messages"][0]["content"]
+    assert "what's on my calendar this month" in rewrite_call_content
+    assert "what about next month" in rewrite_call_content
+
+
+def test_ask_records_original_question_and_answer_as_new_turns(tmp_path):
+    conversation_store = ConversationStore(tmp_path / "conversations.db")
+    store = IndexStore(tmp_path / "index.db")
+    query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    _seed_high_confidence_chunk(store, "quarterly budget report", query_vec)
+    reranker = _FakeReranker({"quarterly budget report": 10.0})
+    client = _FakeClient("Here's the budget report [1].")
+
+    ask(
+        "budget report", store=store, embedder=_FakeEmbedder(query_vec), reranker=reranker,
+        analyzer=_FakeAnalyzer(), client=client, model="claude-haiku-4-5", now=_NOW,
+        conversation_id="thread-1", conversation_store=conversation_store,
+    )
+
+    turns = conversation_store.list_turns("thread-1")
+    assert [t["role"] for t in turns] == ["user", "assistant"]
+    assert turns[0]["content"] == "budget report"
+    assert turns[1]["content"] == "Here's the budget report [1]."
+
+
+def test_ask_does_not_record_turns_when_abstaining(tmp_path):
+    conversation_store = ConversationStore(tmp_path / "conversations.db")
+    store = IndexStore(tmp_path / "index.db")
+    query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+    ask(
+        "anything", store=store, embedder=_FakeEmbedder(query_vec), reranker=_FakeReranker({}),
+        analyzer=_FakeAnalyzer(), client=None, model="claude-haiku-4-5", now=_NOW,
+        conversation_id="thread-1", conversation_store=conversation_store,
+    )
+
+    assert conversation_store.list_turns("thread-1") == []

@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from meridian.conversation.followup import rewrite_followup_question
 from meridian.indexing.embedder import embed_chunks
 from meridian.indexing.store import IndexStore
 from meridian.query.anthropic_client import call_claude
@@ -22,6 +23,11 @@ from meridian.query.prompt import (
 from meridian.query.retrieval import AbstainReason, RetrievedChunk, retrieve
 from meridian.redaction.tokenize import tokenize_for_external_call, untokenize
 from meridian.security.audit_log import record_event
+
+# a simple fixed window, not a summarization strategy - bounds prompt
+# growth for a long-running thread by keeping only the most recent turns
+# (5 question/answer pairs) rather than letting it grow without bound.
+_MAX_CONVERSATION_HISTORY_TURNS = 10
 
 
 def _llm_confirms_relevance(
@@ -79,6 +85,8 @@ def ask(
     now: datetime | None = None,
     logger: logging.Logger | None = None,
     audit_log_dir: Path | None = None,
+    conversation_id: str | None = None,
+    conversation_store: Any = None,
 ) -> AnswerResult:
     """runs the full query pipeline: retrieve, then either abstain, report
     retrieval-only results (no api key configured), or generate a grounded
@@ -87,15 +95,35 @@ def ask(
     the redaction mapping is a local variable here, built by exactly one
     tokenize_for_external_call() covering the whole prompt and consumed by
     exactly one untokenize() on the response - it never outlives this call
-    and is never persisted, per the project's redaction design."""
-    now = now if now is not None else datetime.now(tz=timezone.utc)
-    date_range = extract_date_range(question, now=now)
+    and is never persisted, per the project's redaction design.
 
-    question_embedding = np.array(embed_chunks(embedder, [question])[0], dtype=np.float32)
+    conversation_id/conversation_store are both optional (default None,
+    same pattern as every other optional store threaded through this
+    project) - when both are given, prior turns in that thread are used
+    to (1) rewrite a bare follow-up like "what about next month" into a
+    standalone, retrievable question, and (2) give the final answer-
+    generation call the same conversational context. AnswerResult.question
+    always reports the original, as-typed question, not the rewritten
+    one - only retrieval and the final prompt use the rewritten form."""
+    now = now if now is not None else datetime.now(tz=timezone.utc)
+
+    history: list[Any] = []
+    effective_question = question
+    if conversation_id is not None and conversation_store is not None:
+        history = list(conversation_store.list_turns(conversation_id, limit=_MAX_CONVERSATION_HISTORY_TURNS))
+        if history and client is not None:
+            effective_question = rewrite_followup_question(
+                history, question, client=client, model=model, analyzer=analyzer,
+                logger=logger, audit_log_dir=audit_log_dir,
+            )
+
+    date_range = extract_date_range(effective_question, now=now)
+
+    question_embedding = np.array(embed_chunks(embedder, [effective_question])[0], dtype=np.float32)
 
     result = retrieve(
         store,
-        question,
+        effective_question,
         question_embedding,
         reranker=reranker,
         date_range=date_range,
@@ -121,7 +149,8 @@ def ask(
         # was just preventing it from ever seeing a real candidate to
         # frame that way.
         fallback = retrieve(
-            store, question, question_embedding, reranker=reranker, date_range=None, source=source, logger=logger,
+            store, effective_question, question_embedding, reranker=reranker, date_range=None,
+            source=source, logger=logger,
         )
         result = fallback if not fallback.abstained else replace(fallback, abstain_reason="no_upcoming_match")
 
@@ -132,7 +161,7 @@ def ask(
         # there's nothing to tiebreak and this is skipped for those.
         top_chunk = result.chunks[0]
         if _llm_confirms_relevance(
-            question, top_chunk.parent_text, client=client, model=model, analyzer=analyzer,
+            effective_question, top_chunk.parent_text, client=client, model=model, analyzer=analyzer,
             logger=logger, audit_log_dir=audit_log_dir,
         ):
             result = replace(result, abstained=False, abstain_reason=None, chunks=[top_chunk])
@@ -161,7 +190,7 @@ def ask(
             llm_configured=False,
         )
 
-    user_message = build_user_message(question, result.chunks, now=now)
+    user_message = build_user_message(effective_question, result.chunks, now=now, history=history)
     tokenization = tokenize_for_external_call(user_message, analyzer=analyzer, logger=logger)
     if audit_log_dir is not None:
         record_event(
@@ -176,6 +205,15 @@ def ask(
         logger=logger,
     )
     answer = untokenize(raw_answer, tokenization.mapping)
+
+    if conversation_id is not None and conversation_store is not None:
+        # only the successful-answer path is recorded (not an abstain) -
+        # keeps this simple and avoids duplicating the abstain-message
+        # text that __main__.py owns for display. A thread that hits an
+        # abstain loses that turn as future rewrite context, which is an
+        # acceptable, honest limitation for now rather than a silent gap.
+        conversation_store.add_turn(conversation_id, "user", question)
+        conversation_store.add_turn(conversation_id, "assistant", answer)
 
     return AnswerResult(
         question=question,

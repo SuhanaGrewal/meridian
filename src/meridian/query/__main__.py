@@ -4,6 +4,7 @@ import argparse
 
 from meridian.common.config import ensure_dirs, load_config
 from meridian.common.logging import get_logger
+from meridian.conversation.store import ConversationStore
 from meridian.entity_graph.store import EntityGraphStore
 from meridian.inbox_intelligence.store import InboxIntelligenceStore
 from meridian.indexing.embedder import build_embedder
@@ -45,6 +46,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--model", default=None, help="Override the Claude model to use (default: from .env's LLM_MODEL)."
+    )
+    parser.add_argument(
+        "--thread",
+        default=None,
+        help=(
+            "Conversation thread name - a follow-up question in the same thread "
+            "gets rewritten using prior turns before retrieval (e.g. \"what about "
+            "next month\" after asking about this month). Omit for a one-shot, "
+            "stateless question (default)."
+        ),
     )
     args = parser.parse_args()
 
@@ -100,6 +111,8 @@ def main() -> None:
             print(router_result.answer)
             return
 
+    conversation_store = ConversationStore(config.conversation_dir / "conversations.db") if args.thread else None
+
     result = ask(
         args.question,
         store=store,
@@ -111,6 +124,8 @@ def main() -> None:
         source=args.source,
         logger=logger,
         audit_log_dir=config.log_dir,
+        conversation_id=args.thread,
+        conversation_store=conversation_store,
     )
 
     if result.abstained:

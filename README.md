@@ -295,6 +295,29 @@ Other flags: `--source gmail` to search one source only, `--top-k 3` to
 change how many chunks are retrieved, `--model claude-sonnet-5` to
 override the model for one run.
 
+**Follow-up questions in a thread**: by default every question is a
+fresh, stateless one-shot, same as always. Pass `--thread <name>` to ask
+inside a named conversation instead - a bare follow-up like "what about
+next month" (meaningless on its own) gets rewritten into a standalone
+question using the thread's recent turns before retrieval runs at all,
+via one extra small Claude call (skipped entirely on the thread's first
+question, since there's nothing yet to rewrite against):
+
+```
+python -m meridian.query "what's on my calendar this month" --thread work
+python -m meridian.query "what about next month" --thread work
+python -m meridian.conversation list work
+python -m meridian.conversation clear work
+```
+
+History is a simple fixed window (last 10 turns) — not a summarization
+strategy, so a very long-running thread loses its earliest turns rather
+than the prompt growing without bound. Only successful answers are
+recorded into a thread, not abstains. Threading is currently scoped to
+plain fact questions (`ask()`) only - the router's other six intents
+(stale threads, commitments, resolve, broad summaries, reminders, draft
+replies) remain one-shot for now.
+
 **Follow-up tracking**: when an `LLM_API_KEY` is set, every question asked
 here is recorded to `data/query/query_history.db`
 (`query/history_store.py`) and classified (one small Claude call) as

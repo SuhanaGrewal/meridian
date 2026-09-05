@@ -33,6 +33,46 @@ on it yet.
 
 ## Fixed
 
+### 22. No way to ask a follow-up question with context from the prior one
+Requested: "how do we create a text thread where I can ask follow up
+questions?" Every query was fully stateless - `ask()` had no memory
+between invocations, so "what about next month" (after asking about this
+month) had nothing to resolve "next month" against and would fail
+retrieval on its own.
+
+New `conversation/` module: `store.py::ConversationStore` persists a
+thread's turns as plain real text (never a redaction mapping - mappings
+stay per-call and are never persisted, per this project's existing
+redaction design; each turn just gets folded into the same single
+prompt string and re-redacted fresh on every call, like everything
+else). `followup.py::rewrite_followup_question()` is the piece that
+actually makes retrieval work on a bare follow-up: one small Claude call
+expands "what about next month" into a standalone, retrievable question
+using the thread's recent turns, before embedding/retrieval ever runs -
+skipped entirely (no LLM call) when the thread has no history yet.
+`query/answer.py::ask()` gained optional `conversation_id`/
+`conversation_store` params (default `None`, same pattern as every
+other optional store in this project) - wired into
+`python -m meridian.query "<text>" --thread <name>`; omit `--thread` for
+the original one-shot, stateless behavior.
+
+Scoped deliberately narrow for now: only the GENERAL/fact-question path
+(`ask()`) is conversation-aware, not the other six router intents
+(stale threads, commitments, resolve, broad summary, reminders, drafts) -
+those remain one-shot. History is a simple fixed window (last 10 turns),
+not a summarization strategy, so a very long-running thread loses its
+earliest context rather than the prompt growing without bound. An
+abstained turn isn't recorded into the thread (only a successful answer
+is), so a follow-up to an abstain has nothing to reference.
+
+Also has its own CLI (`python -m meridian.conversation list/clear
+<thread>`) as a direct escape hatch.
+
+Verified against real data end to end: asked "any upcoming flight
+bookings" in a thread, then "what was the booking reference again?" as a
+genuine bare follow-up with no meaning on its own - correctly answered
+"XHQS83" by resolving it against the prior turn.
+
 ### 20. Reranker under-scored genuinely correct matches, causing wrong abstains
 Found via real testing: "any upcoming flight bookings" and a laptop
 drop-off question both abstained ("nothing confident enough") even
@@ -483,11 +523,13 @@ message's `TimeoutError` mid-sync. Fixed by catching `TimeoutError`/
 ## Also found, not yet actioned
 
 ### 5. No consumer-facing interface
-CLI-only today — no chat window, no notifications when a digest is ready.
-Scoped earlier at roughly 1-2 weeks for a basic local web chat UI +
-native macOS notification, separate from the "installable by a
-non-technical person" problem (bigger, includes OAuth consent-screen
-verification concerns).
+CLI-only today — no chat window. Native calendar notifications exist now
+(#12); a chat window backend piece exists now too (#22's
+`ConversationStore` + follow-up rewriting - a UI just needs to call
+`query.answer.ask()` with a `conversation_id` per open chat window). The
+UI itself is still not built, and the "installable by a non-technical
+person" problem (bigger, includes OAuth consent-screen verification
+concerns) is untouched.
 
 ### 6. Cosmetic: HuggingFace Hub warning on every query
 `sentence-transformers` prints "You are sending unauthenticated requests to

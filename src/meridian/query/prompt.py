@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from meridian.query.date_range import parse_stored_date
 from meridian.query.retrieval import RetrievedChunk
@@ -75,14 +76,29 @@ def _source_label(chunk: RetrievedChunk, *, now: datetime | None = None) -> str:
     return f"{chunk.source} item {chunk.source_item_id}"
 
 
-def build_user_message(question: str, chunks: list[RetrievedChunk], *, now: datetime | None = None) -> str:
+def build_user_message(
+    question: str, chunks: list[RetrievedChunk], *, now: datetime | None = None, history: list[Any] | None = None
+) -> str:
     """assembles the question plus every retrieved chunk's parent context
     into one message, numbered for citation. this whole string gets
     tokenized exactly once before being sent externally. `now` drives the
     per-item "(N days ago)" / "(in N days)" labels in _source_label, so the
-    model never has to compute past-vs-future itself."""
+    model never has to compute past-vs-future itself. `history`, when
+    given, prepends the conversation's prior turns for follow-up context -
+    folded into this same single string rather than Claude's native
+    multi-turn `messages` shape, so it still gets covered by exactly one
+    tokenize_for_external_call() like everything else in this project
+    (see query/answer.py's docstring on why the redaction mapping is
+    never persisted across calls)."""
     now = now if now is not None else datetime.now(tz=timezone.utc)
-    lines = [f"Today's date: {now.date().isoformat()}", "", f"Question:\n{question}", "", "Context:"]
+    lines = [f"Today's date: {now.date().isoformat()}", ""]
+    if history:
+        lines.append("Recent conversation in this thread:")
+        for turn in history:
+            speaker = "User" if turn["role"] == "user" else "Assistant"
+            lines.append(f"{speaker}: {turn['content']}")
+        lines.append("")
+    lines += [f"Question:\n{question}", "", "Context:"]
     for index, chunk in enumerate(chunks, start=1):
         lines.append(f"[{index}] {_source_label(chunk, now=now)}")
         lines.append(chunk.parent_text)

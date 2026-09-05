@@ -165,6 +165,26 @@ def test_build_user_message_defaults_now_when_not_given():
     assert "Today's date:" in message
 
 
+def test_build_user_message_with_history_prepends_conversation():
+    history = [
+        {"role": "user", "content": "what's on my calendar this month"},
+        {"role": "assistant", "content": "You have a meeting on the 10th [1]."},
+    ]
+
+    message = build_user_message("what about next month", [], history=history)
+
+    assert "Recent conversation in this thread:" in message
+    assert "User: what's on my calendar this month" in message
+    assert "Assistant: You have a meeting on the 10th [1]." in message
+    assert message.index("Recent conversation") < message.index("Question:")
+
+
+def test_build_user_message_without_history_omits_conversation_section():
+    message = build_user_message("a question", [])
+
+    assert "Recent conversation" not in message
+
+
 def test_format_sources_numbers_match_build_user_message():
     chunks = [_chunk("gmail", {"subject": "Budget"}), _chunk("docs", {"title": "Roadmap"})]
 
