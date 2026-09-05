@@ -2,23 +2,34 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from meridian.digest.gather import gather_items
 from meridian.inbox_intelligence.stale_threads import find_stale_threads
 from meridian.query.anthropic_client import call_claude
+from meridian.query.date_range import extract_date_range
 from meridian.query.router_prompt import (
     CLASSIFY_SYSTEM_PROMPT,
     MATCH_RESOLVE_SYSTEM_PROMPT,
+    SUMMARIZE_BROAD_ASK_SYSTEM_PROMPT,
     SUMMARIZE_STALE_THREADS_SYSTEM_PROMPT,
+    build_broad_ask_user_message,
     build_resolve_candidates_message,
     build_stale_threads_user_message,
 )
 from meridian.redaction.tokenize import tokenize_for_external_call, untokenize
 from meridian.security.audit_log import record_event
 
-Intent = Literal["stale_threads", "commitments", "resolve", "general"]
+Intent = Literal["stale_threads", "commitments", "resolve", "broad_summary", "general"]
+
+# default backward-looking window for a broad ask with no recognized date
+# phrase of its own (e.g. "summarize my recent emails") - matches
+# digest's own --lookback-hours-ish philosophy of "a sensible recent
+# window," not an exhaustive all-time gather.
+_DEFAULT_BROAD_ASK_LOOKBACK_DAYS = 7
+_DEFAULT_BROAD_ASK_LOOKAHEAD_DAYS = 3
 
 # a mailbox's full history can hold hundreds of ancient "stale" threads
 # (see inbox_intelligence's own real-data finding: 574 before this kind of
@@ -73,6 +84,8 @@ def classify_intent(
         return "commitments"
     if "RESOLVE" in normalized:
         return "resolve"
+    if "BROAD_SUMMARY" in normalized:
+        return "broad_summary"
     return "general"
 
 
@@ -103,6 +116,46 @@ def _format_commitments(commitments: list[Any]) -> str:
         due = f" (due {row['due_date']})" if row["due_date"] else ""
         lines.append(f"{who}: {row['description']}{due}")
     return "\n".join(lines)
+
+
+def _summarize_broad_ask(
+    text: str,
+    *,
+    gmail_store: Any,
+    calendar_store: Any,
+    docs_store: Any,
+    notes_store: Any,
+    entity_store: Any,
+    now: datetime,
+    client: Any,
+    model: str,
+    analyzer: Any,
+    logger: logging.Logger | None = None,
+    audit_log_dir: Path | None = None,
+) -> str:
+    """reuses digest/gather.py's gather_items() rather than reimplementing
+    "grab everything recent" - this is exactly the same problem the
+    digest already solves, just triggered by a direct question instead
+    of a scheduled job. If the question itself names a recognizable
+    window ("this week," "last month"), that's honored; otherwise a
+    default 7-day lookback is used, same philosophy as digest's own
+    lookback-hours default."""
+    date_range = extract_date_range(text, now=now)
+    since = date_range[0] if date_range is not None else now - timedelta(days=_DEFAULT_BROAD_ASK_LOOKBACK_DAYS)
+    lookahead_end = now + timedelta(days=_DEFAULT_BROAD_ASK_LOOKAHEAD_DAYS)
+
+    items = gather_items(
+        gmail_store, calendar_store, docs_store, notes_store, entity_store,
+        since=since.isoformat(), now=now.isoformat(), lookahead_end=lookahead_end.isoformat(), logger=logger,
+    )
+    if not items:
+        return "Nothing relevant found for that."
+
+    user_message = build_broad_ask_user_message(text, items)
+    return _call_llm(
+        client=client, model=model, system=SUMMARIZE_BROAD_ASK_SYSTEM_PROMPT, text=user_message,
+        analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir, operation="query.router_broad_summary",
+    )
 
 
 @dataclass(frozen=True)
@@ -164,18 +217,29 @@ def route(
     client: Any,
     model: str,
     analyzer: Any,
+    calendar_store: Any = None,
+    docs_store: Any = None,
+    notes_store: Any = None,
+    entity_store: Any = None,
     now: datetime | None = None,
     logger: logging.Logger | None = None,
     audit_log_dir: Path | None = None,
 ) -> RouterResult:
     """classifies a free-text message into stale_threads / commitments /
-    resolve / general, and directly answers the first three (general falls
-    through to query.answer.ask(), handled by the caller). This is the
-    "everything is a text message" entry point - a real frontend wouldn't
-    expose separate CLI subcommands per capability, it maps one text box
-    to whichever backend actually answers the question."""
+    resolve / broad_summary / general, and directly answers the first
+    four (general falls through to query.answer.ask(), handled by the
+    caller). This is the "everything is a text message" entry point - a
+    real frontend wouldn't expose separate CLI subcommands per
+    capability, it maps one text box to whichever backend actually
+    answers the question. calendar_store/docs_store/notes_store/
+    entity_store are only needed for broad_summary - if the caller
+    doesn't have them wired up, a broad ask just falls through to
+    general instead of erroring."""
     now = now if now is not None else datetime.now(tz=timezone.utc)
     intent = classify_intent(text, client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir)
+
+    if intent == "broad_summary" and None in (calendar_store, docs_store, notes_store, entity_store):
+        intent = "general"
 
     if intent in ("stale_threads", "resolve") and account_email is None:
         return RouterResult(
@@ -208,5 +272,13 @@ def route(
             client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir,
         )
         return RouterResult(intent="resolve", answer=answer)
+
+    if intent == "broad_summary":
+        answer = _summarize_broad_ask(
+            text, gmail_store=gmail_store, calendar_store=calendar_store, docs_store=docs_store,
+            notes_store=notes_store, entity_store=entity_store, now=now,
+            client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir,
+        )
+        return RouterResult(intent="broad_summary", answer=answer)
 
     return RouterResult(intent="general", answer=None)

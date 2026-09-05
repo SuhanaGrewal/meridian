@@ -17,8 +17,15 @@ CLASSIFY_SYSTEM_PROMPT = (
     "it stops being shown (e.g. \"mark that resolved\", \"I already "
     "replied to that\", \"that's handled now\", \"you can omit that one "
     "going forward\").\n"
+    "BROAD_SUMMARY - asking for a general overview of recent activity "
+    "across a source, not one specific fact (e.g. \"summarize my recent "
+    "emails\", \"catch me up on my inbox\", \"what's been happening "
+    "lately\", \"what's new\"). Different from STALE_THREADS: this is "
+    "about recent activity in general, not specifically about what's "
+    "waiting on a reply.\n"
     "GENERAL - anything else, including specific fact questions about "
-    "email, calendar, document, or note content."
+    "email, calendar, document, or note content (e.g. \"when did I fly to "
+    "London\", \"what did Jane say about the budget\")."
 )
 
 SUMMARIZE_STALE_THREADS_SYSTEM_PROMPT = (
@@ -33,6 +40,24 @@ SUMMARIZE_STALE_THREADS_SYSTEM_PROMPT = (
     "the email\"), in which case you may quote the relevant part. If there "
     "are no threads, say so plainly. Cite each thread you mention by its "
     "bracket number, like [1].\n\n"
+    "Some names, email addresses, phone numbers, and addresses have been "
+    "replaced with placeholders like <PERSON_1>, <EMAIL_ADDRESS_1>, "
+    "<PHONE_NUMBER_1>, or <HOME_ADDRESS_1> to protect privacy. Treat these "
+    "exactly like real names/emails/etc. - use them naturally, and do not "
+    "comment on or explain the placeholders themselves."
+)
+
+SUMMARIZE_BROAD_ASK_SYSTEM_PROMPT = (
+    "You are directly answering the user's own question by summarizing "
+    "the gathered items below. Use ONLY the items given - never invent "
+    "anything not present. Write like you're giving a direct answer, not "
+    "composing a report: plain sentences, no markdown headers, no bullet "
+    "lists dressed up as content categories, no emoji. Organize by source "
+    "(calendar, email, docs, notes) rather than by topic. If several items "
+    "are routine noise (e.g. newsletters), say how many there were and "
+    "name only the one or two actually worth mentioning, then move on. If "
+    "there's nothing relevant, say so plainly. Cite each item you mention "
+    "by its bracket number, like [1].\n\n"
     "Some names, email addresses, phone numbers, and addresses have been "
     "replaced with placeholders like <PERSON_1>, <EMAIL_ADDRESS_1>, "
     "<PHONE_NUMBER_1>, or <HOME_ADDRESS_1> to protect privacy. Treat these "
@@ -66,4 +91,14 @@ def build_resolve_candidates_message(text: str, labels: list[str]) -> str:
     lines = [f"User's message:\n{text}", "", "Open items:"]
     for index, label in enumerate(labels, start=1):
         lines.append(f"[{index}] {label}")
+    return "\n".join(lines).strip()
+
+
+def build_broad_ask_user_message(question: str, items: list[Any]) -> str:
+    lines = [f"User's question:\n{question}", "", "Items:"]
+    for index, item in enumerate(items, start=1):
+        lines.append(f"[{index}] {item['label']}")
+        if item["detail"]:
+            lines.append(item["detail"])
+        lines.append("")
     return "\n".join(lines).strip()

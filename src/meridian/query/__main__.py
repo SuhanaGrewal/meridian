@@ -4,10 +4,14 @@ import argparse
 
 from meridian.common.config import ensure_dirs, load_config
 from meridian.common.logging import get_logger
+from meridian.entity_graph.store import EntityGraphStore
 from meridian.inbox_intelligence.store import InboxIntelligenceStore
 from meridian.indexing.embedder import build_embedder
 from meridian.indexing.store import IndexStore
+from meridian.ingestion.calendar.store import CalendarStore
+from meridian.ingestion.docs.store import DocsStore
 from meridian.ingestion.gmail.store import GmailStore
+from meridian.ingestion.local_files.store import NotesStore
 from meridian.query.anthropic_client import build_client
 from meridian.query.answer import ask
 from meridian.query.reranker import build_reranker
@@ -66,6 +70,10 @@ def main() -> None:
             client=client,
             model=args.model or config.llm_model,
             analyzer=analyzer,
+            calendar_store=CalendarStore(config.ingestion_dir / "calendar" / "calendar.db"),
+            docs_store=DocsStore(config.ingestion_dir / "docs" / "docs.db"),
+            notes_store=NotesStore(config.ingestion_dir / "local_files" / "local_files.db"),
+            entity_store=EntityGraphStore(config.entity_graph_dir / "entity_graph.db"),
             logger=logger,
             audit_log_dir=config.log_dir,
         )

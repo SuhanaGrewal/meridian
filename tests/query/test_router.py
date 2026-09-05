@@ -1,8 +1,12 @@
 from datetime import datetime, timezone
 
+from meridian.entity_graph.store import EntityGraphStore
 from meridian.inbox_intelligence.store import InboxIntelligenceStore
+from meridian.ingestion.calendar.store import CalendarStore
+from meridian.ingestion.docs.store import DocsStore
 from meridian.ingestion.gmail.message_parser import ParsedMessage
 from meridian.ingestion.gmail.store import GmailStore
+from meridian.ingestion.local_files.store import NotesStore
 from meridian.query.router import classify_intent, route
 
 _ACCOUNT_EMAIL = "me@example.com"
@@ -264,4 +268,73 @@ def test_route_resolve_with_nothing_open_skips_second_llm_call(tmp_path):
     )
 
     assert "nothing open" in result.answer.lower()
+    assert len(client.messages.calls) == 1
+
+
+def _empty_broad_ask_stores(tmp_path):
+    return (
+        CalendarStore(tmp_path / "calendar.db"),
+        DocsStore(tmp_path / "docs.db"),
+        NotesStore(tmp_path / "local_files.db"),
+        EntityGraphStore(tmp_path / "entity_graph.db"),
+    )
+
+
+def test_classify_intent_broad_summary():
+    client = _FakeClient(["BROAD_SUMMARY"])
+
+    intent = classify_intent("summarize my recent emails", client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer())
+
+    assert intent == "broad_summary"
+
+
+def test_route_broad_summary_without_gather_stores_falls_through_to_general(tmp_path):
+    """calendar_store/docs_store/notes_store/entity_store are optional -
+    a caller that hasn't wired them up shouldn't get an error, just the
+    same fallback-to-ask() behavior as any other general question."""
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    client = _FakeClient(["BROAD_SUMMARY"])
+
+    result = route(
+        "summarize my recent emails", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+    )
+
+    assert result.intent == "general"
+    assert result.answer is None
+    assert len(client.messages.calls) == 1
+
+
+def test_route_broad_summary_gathers_and_summarizes(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    gmail_store.upsert_message(_message("m1", "t1", "Alice <alice@example.com>", "2024-06-08T00:00:00+00:00"))
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    calendar_store, docs_store, notes_store, entity_store = _empty_broad_ask_stores(tmp_path)
+    client = _FakeClient(["BROAD_SUMMARY", "You got one email from Alice this week [1]."])
+
+    result = route(
+        "summarize my recent emails", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+        calendar_store=calendar_store, docs_store=docs_store, notes_store=notes_store, entity_store=entity_store,
+    )
+
+    assert result.intent == "broad_summary"
+    assert result.answer == "You got one email from Alice this week [1]."
+    assert len(client.messages.calls) == 2
+
+
+def test_route_broad_summary_with_nothing_gathered_skips_second_llm_call(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    calendar_store, docs_store, notes_store, entity_store = _empty_broad_ask_stores(tmp_path)
+    client = _FakeClient(["BROAD_SUMMARY"])
+
+    result = route(
+        "summarize my recent emails", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+        calendar_store=calendar_store, docs_store=docs_store, notes_store=notes_store, entity_store=entity_store,
+    )
+
+    assert result.answer == "Nothing relevant found for that."
     assert len(client.messages.calls) == 1
