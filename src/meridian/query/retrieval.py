@@ -13,7 +13,12 @@ from meridian.indexing.store import IndexStore
 from meridian.query.date_range import chunk_in_range
 from meridian.query.reranker import rerank
 
-AbstainReason = Literal["no_candidates", "no_candidates_in_date_range", "low_confidence"]
+AbstainReason = Literal["no_candidates", "no_candidates_in_date_range", "low_confidence", "no_upcoming_match"]
+# "no_upcoming_match" is never returned by retrieve() itself - it's set by
+# answer.py::ask() when a forward-looking date query (e.g. "upcoming
+# flights") finds nothing even after falling back to an unfiltered search,
+# so the abstain message can say plainly "nothing upcoming, and no past
+# record either" instead of the more generic date-range message.
 
 
 @dataclass(frozen=True)

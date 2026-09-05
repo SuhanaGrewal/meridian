@@ -71,6 +71,21 @@ class _FakeClient:
         self.messages = _FakeMessages(reply_text)
 
 
+class _FakeMultiReplyMessages:
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeResponse(self._replies.pop(0))
+
+
+class _FakeMultiReplyClient:
+    def __init__(self, replies):
+        self.messages = _FakeMultiReplyMessages(replies)
+
+
 class _RaisingClient:
     """fails the test if the llm is ever called - used to prove abstain is zero-cost."""
 
@@ -198,7 +213,7 @@ def test_ask_records_an_audit_event_for_the_external_llm_call(tmp_path):
     assert "entity_counts" in entry["detail"]
 
 
-def test_ask_low_confidence_abstains_without_calling_llm(tmp_path):
+def test_ask_low_confidence_abstain_with_no_client_never_calls_llm(tmp_path):
     store = IndexStore(tmp_path / "index.db")
     query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
     _seed_high_confidence_chunk(store, "unrelated content", query_vec, metadata={"subject": "x"})
@@ -210,7 +225,7 @@ def test_ask_low_confidence_abstains_without_calling_llm(tmp_path):
         embedder=_FakeEmbedder(query_vec),
         reranker=reranker,
         analyzer=_FakeAnalyzer(),
-        client=_RaisingClient(),
+        client=None,
         model="claude-haiku-4-5",
         now=_NOW,
     )
@@ -218,3 +233,132 @@ def test_ask_low_confidence_abstains_without_calling_llm(tmp_path):
     assert result.abstained is True
     assert result.abstain_reason == "low_confidence"
     assert result.answer is None
+
+
+def test_ask_low_confidence_tiebreak_confirms_no_still_abstains(tmp_path):
+    # the reranker scored it too low to trust, and the LLM tiebreak agrees
+    # it's not actually relevant - correctly still abstains, just via one
+    # extra confirming call rather than a raw score cutoff alone.
+    store = IndexStore(tmp_path / "index.db")
+    query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    _seed_high_confidence_chunk(store, "unrelated content", query_vec, metadata={"subject": "x"})
+    reranker = _FakeReranker({"unrelated content": -10.0})
+    client = _FakeClient("NO")
+
+    result = ask(
+        "unrelated",
+        store=store,
+        embedder=_FakeEmbedder(query_vec),
+        reranker=reranker,
+        analyzer=_FakeAnalyzer(),
+        client=client,
+        model="claude-haiku-4-5",
+        now=_NOW,
+    )
+
+    assert result.abstained is True
+    assert result.abstain_reason == "low_confidence"
+    assert result.answer is None
+    assert len(client.messages.calls) == 1
+
+
+def test_ask_low_confidence_tiebreak_confirms_yes_answers_anyway(tmp_path):
+    # the reranker scored the genuinely-correct top candidate too low to
+    # trust on its own - the LLM tiebreak confirms it's actually relevant,
+    # so this should un-abstain and generate an answer from just that one
+    # confirmed chunk, not the full unfiltered candidate pool.
+    store = IndexStore(tmp_path / "index.db")
+    query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    _seed_high_confidence_chunk(
+        store, "the laptop drop-off is at the office on Tuesday", query_vec,
+        metadata={"subject": "IT Kit", "sender": "billy@example.com", "sent_at": "2024-06-01T00:00:00Z"},
+    )
+    reranker = _FakeReranker({"the laptop drop-off is at the office on Tuesday": -10.0})
+    client = _FakeMultiReplyClient(["YES", "You need to drop it off at the office on Tuesday [1]."])
+
+    result = ask(
+        "where do I drop off my laptop",
+        store=store, embedder=_FakeEmbedder(query_vec), reranker=reranker,
+        analyzer=_FakeAnalyzer(), client=client, model="claude-haiku-4-5", now=_NOW,
+    )
+
+    assert result.abstained is False
+    assert result.answer == "You need to drop it off at the office on Tuesday [1]."
+    assert len(result.chunks) == 1
+    assert len(client.messages.calls) == 2
+
+
+def test_ask_forward_looking_query_falls_back_to_past_match_when_nothing_upcoming(tmp_path):
+    # "next week" (2024-06-17 to 2024-06-24) excludes this past-dated
+    # chunk entirely - the fallback (unfiltered) search should still find
+    # it and let the LLM frame "nothing upcoming, here's your last one"
+    # using the existing recency-labeling machinery, rather than just
+    # abstaining because the strict date filter found nothing.
+    store = IndexStore(tmp_path / "index.db")
+    query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    _seed_high_confidence_chunk(
+        store, "Flight booking confirmation for your trip", query_vec,
+        metadata={"subject": "Flight", "sender": "airline@example.com", "sent_at": "2024-05-01T00:00:00Z"},
+    )
+    reranker = _FakeReranker({"Flight booking confirmation for your trip": 10.0})
+    client = _FakeClient("There's nothing upcoming, but your last flight was on May 1st [1].")
+
+    result = ask(
+        "any upcoming flight bookings next week",
+        store=store, embedder=_FakeEmbedder(query_vec), reranker=reranker,
+        analyzer=_FakeAnalyzer(), client=client, model="claude-haiku-4-5", now=_NOW,
+    )
+
+    assert result.abstained is False
+    assert result.answer == "There's nothing upcoming, but your last flight was on May 1st [1]."
+    assert len(result.chunks) == 1
+
+
+def test_ask_forward_looking_query_abstains_with_no_upcoming_match_when_nothing_at_all(tmp_path):
+    # a past-dated, unrelated chunk exists (so hybrid search finds
+    # something and the date filter is what actually excludes it - not an
+    # empty index), but it's a poor semantic match even once the date
+    # filter is lifted in the fallback, and the LLM tiebreak agrees it's
+    # not relevant either - nothing usable in either direction, so this
+    # should land on the more specific "no_upcoming_match" reason, not
+    # the generic "no_candidates".
+    store = IndexStore(tmp_path / "index.db")
+    query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    _seed_high_confidence_chunk(
+        store, "unrelated old content", query_vec,
+        metadata={"subject": "x", "sent_at": "2024-05-01T00:00:00Z"},
+    )
+    reranker = _FakeReranker({"unrelated old content": -10.0})
+    client = _FakeClient("NO")
+
+    result = ask(
+        "any upcoming flight bookings next week",
+        store=store, embedder=_FakeEmbedder(query_vec), reranker=reranker,
+        analyzer=_FakeAnalyzer(), client=client, model="claude-haiku-4-5", now=_NOW,
+    )
+
+    assert result.abstained is True
+    assert result.abstain_reason == "no_upcoming_match"
+    assert result.answer is None
+
+
+def test_ask_backward_looking_query_does_not_fall_back(tmp_path):
+    # "last week" found nothing in range - unlike a forward-looking query,
+    # this should NOT retry unfiltered, since surfacing an unrelated item
+    # from some other time as a substitute for "last week" wouldn't make
+    # sense to the user.
+    store = IndexStore(tmp_path / "index.db")
+    query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    _seed_high_confidence_chunk(
+        store, "Flight booking confirmation for your trip", query_vec,
+        metadata={"subject": "Flight", "sender": "airline@example.com", "sent_at": "2024-05-01T00:00:00Z"},
+    )
+    reranker = _FakeReranker({"Flight booking confirmation for your trip": 10.0})
+
+    result = ask(
+        "what happened last week", store=store, embedder=_FakeEmbedder(query_vec), reranker=reranker,
+        analyzer=_FakeAnalyzer(), client=_RaisingClient(), model="claude-haiku-4-5", now=_NOW,
+    )
+
+    assert result.abstained is True
+    assert result.abstain_reason == "no_candidates_in_date_range"

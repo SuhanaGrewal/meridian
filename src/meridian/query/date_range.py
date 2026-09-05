@@ -131,6 +131,20 @@ def extract_date_range(question: str, *, now: datetime) -> tuple[datetime, datet
     return None
 
 
+def is_forward_looking_range(date_range: tuple[datetime, datetime], *, now: datetime) -> bool:
+    """true for a range that only reaches into the present/future (e.g.
+    "next week," "upcoming," "next Friday," bare "today") - the phrases
+    for which finding nothing should trigger a fallback to the most
+    recent past match rather than just abstaining outright (see
+    answer.py::ask()). False for a range anchored in the past (e.g. "last
+    week," "this month," a bare weekday name resolving to its most recent
+    past occurrence), where surfacing an unrelated past item as a
+    substitute wouldn't make sense - the user already knows they're
+    asking about the past."""
+    start, _ = date_range
+    return start >= _start_of_day(now)
+
+
 def parse_stored_date(value: str | None) -> datetime | None:
     """parses an iso8601 string (full datetime or a bare date) into an
     aware datetime. returns None for anything missing or unparseable,

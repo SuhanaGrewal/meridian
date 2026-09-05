@@ -26,6 +26,7 @@ _ABSTAIN_MESSAGES = {
     "no_candidates": "Nothing in the index looks related to that question.",
     "no_candidates_in_date_range": "Found related content, but none of it falls in that date range.",
     "low_confidence": "Nothing found was a confident enough match to answer from.",
+    "no_upcoming_match": "Nothing upcoming found for that, and no earlier record either.",
 }
 
 

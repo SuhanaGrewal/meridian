@@ -310,6 +310,22 @@ not your local wall-clock day — fine for a personal tool, but "today"
 could be off by a few hours right around midnight depending on your
 timezone.
 
+**Reranker tiebreak**: the local cross-encoder reranker occasionally
+scores a genuinely correct top match too low to trust (confirmed via real
+testing on typo-laden or vocabulary-mismatched questions). Before
+abstaining on a low-confidence top result, one small Claude call checks
+whether it's actually relevant - if confirmed, the answer is generated
+from just that one chunk. Only spent on the already-rare abstaining path,
+never on a confident match. This doesn't help when the right content
+never made it into the candidate pool at all (a retrieval-recall gap,
+tracked separately in `BACKLOG.md` #21) - only when it was found but
+under-scored.
+
+A forward-looking date question ("upcoming," "next week") that finds
+nothing in that window automatically retries without the date filter, so
+a real past match can still be mentioned for context ("no upcoming
+flights, but your last one was on May 1st") instead of just abstaining.
+
 A test that makes a real (paid) Claude API call exists
 (`tests/query/test_answer_real.py`) but only runs if you explicitly set
 `MERIDIAN_RUN_LIVE_LLM_TESTS=1` in addition to `LLM_API_KEY` — it's

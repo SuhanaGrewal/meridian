@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from meridian.query.date_range import chunk_in_range, extract_date_range, parse_stored_date
+from meridian.query.date_range import chunk_in_range, extract_date_range, is_forward_looking_range, parse_stored_date
 
 # a fixed wednesday for deterministic tests
 _NOW = datetime(2024, 6, 12, 15, 30, tzinfo=timezone.utc)  # 2024-06-12 is a Wednesday
@@ -240,3 +240,39 @@ def test_chunk_in_range_missing_or_unparseable_date_passes():
     assert chunk_in_range("gmail", {"sent_at": ""}, date_range) is True
     assert chunk_in_range("calendar", {"start_at": None}, date_range) is True
     assert chunk_in_range("gmail", {}, date_range) is True
+
+
+def test_is_forward_looking_range_true_for_next_week():
+    date_range = extract_date_range("what's on my calendar next week", now=_NOW)
+
+    assert is_forward_looking_range(date_range, now=_NOW) is True
+
+
+def test_is_forward_looking_range_true_for_upcoming():
+    date_range = extract_date_range("any upcoming flights", now=_NOW)
+
+    assert is_forward_looking_range(date_range, now=_NOW) is True
+
+
+def test_is_forward_looking_range_true_for_today():
+    date_range = extract_date_range("what's happening today", now=_NOW)
+
+    assert is_forward_looking_range(date_range, now=_NOW) is True
+
+
+def test_is_forward_looking_range_false_for_last_week():
+    date_range = extract_date_range("what happened last week", now=_NOW)
+
+    assert is_forward_looking_range(date_range, now=_NOW) is False
+
+
+def test_is_forward_looking_range_false_for_this_month():
+    date_range = extract_date_range("what happened this month", now=_NOW)
+
+    assert is_forward_looking_range(date_range, now=_NOW) is False
+
+
+def test_is_forward_looking_range_false_for_bare_weekday_in_the_past():
+    date_range = extract_date_range("what did I discuss monday", now=_NOW)
+
+    assert is_forward_looking_range(date_range, now=_NOW) is False

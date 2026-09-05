@@ -90,6 +90,20 @@ def build_user_message(question: str, chunks: list[RetrievedChunk], *, now: date
     return "\n".join(lines).strip()
 
 
+TIEBREAK_SYSTEM_PROMPT = (
+    "Below is a question and one candidate piece of context an automated "
+    "search found for it. The search's own relevance score was low, which "
+    "already suggests this might not be a good match - decide for "
+    "yourself whether the context genuinely contains information that "
+    "answers or is directly relevant to the question, not just a loose "
+    "topical connection. Respond with ONLY YES or NO, nothing else."
+)
+
+
+def build_tiebreak_user_message(question: str, candidate_text: str) -> str:
+    return f"Question:\n{question}\n\nCandidate context:\n{candidate_text}"
+
+
 def format_sources(chunks: list[RetrievedChunk], *, now: datetime | None = None) -> str:
     """renders the final source list from data this project already owns -
     not parsed out of claude's response, which only produces the inline

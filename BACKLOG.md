@@ -33,6 +33,34 @@ on it yet.
 
 ## Fixed
 
+### 20. Reranker under-scored genuinely correct matches, causing wrong abstains
+Found via real testing: "any upcoming flight bookings" and a laptop
+drop-off question both abstained ("nothing confident enough") even
+though the correct answer existed and was already ranked #1 by hybrid
+search. Traced to the local cross-encoder (`ms-marco-MiniLM-L-6-v2`)
+scoring the correct top candidate far below the 0.5 abstain threshold
+(confidences of 0.006-0.03) when the question's phrasing shares little
+vocabulary with the source text (typos, paraphrasing, casual wording) -
+a real, recurring pattern, not a one-off.
+
+Rather than a second, heavier reranker model (likely the same
+vocabulary-matching blind spot, just a bigger version of it), added
+`query/answer.py::_llm_confirms_relevance()` - a last-resort Claude call,
+only spent on the already-rare abstaining path (never on a confident
+answer), asking whether the single top-ranked candidate genuinely
+answers the question. Reuses the same "ask the LLM to judge instead of
+guessing" pattern already used throughout this project (commitment
+filtering, resolve-matching, reminder-matching) rather than adding a new
+ML dependency. If confirmed, the answer is generated from just that one
+chunk (not the full unfiltered pool, to avoid reintroducing noise).
+
+Verified against real data: "any upcoming flight bookings" now correctly
+answers "no upcoming flights, but your last one was [date]" instead of
+abstaining; the laptop drop-off question now correctly answers with
+when/where/how, citing the real thread. A third real failure found in
+the same session ("what is my CV profile") turned out to be a different,
+deeper issue - see #21, not fixed by this change.
+
 ### 1. "Upcoming/future" date filtering
 Two distinct halves, both now fixed. The answer-framing half: asking
 "what flight bookings do I have" used to present an already-happened
@@ -466,3 +494,18 @@ verification concerns).
 the HF Hub..." on every run. Harmless (models are already cached locally),
 but noisy. Fix: `export HF_HUB_OFFLINE=1`, or bake a quiet default into the
 code once models are confirmed cached.
+
+### 21. Retrieval sometimes never surfaces the right document as a candidate at all
+Found while verifying #20's reranker tiebreak fix: "what is my CV
+profile" still abstains, but for a different reason than #20's fixed
+cases. The actual "Suhana Grewal - CV" Google Doc (with the real PROFILE
+section text) never even makes it into the top-5 reranked candidates for
+that phrasing - two unrelated Gmail messages that merely mention "CV" in
+passing, and two completely unrelated docs, rank above it. #20's LLM
+tiebreak only ever examines the single top-ranked candidate, so it can't
+help when the right document was never retrieved as a candidate in the
+first place - this is a hybrid-search/embedding recall gap, not a
+confidence-threshold problem. Not scoped or fixed yet; would need
+investigating why the doc's embedding doesn't surface for this phrasing
+(chunking? embedding model choice? hybrid fusion weighting?) before
+attempting a fix.
