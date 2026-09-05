@@ -4,11 +4,14 @@ import argparse
 
 from meridian.common.config import ensure_dirs, load_config
 from meridian.common.logging import get_logger
+from meridian.inbox_intelligence.store import InboxIntelligenceStore
 from meridian.indexing.embedder import build_embedder
 from meridian.indexing.store import IndexStore
+from meridian.ingestion.gmail.store import GmailStore
 from meridian.query.anthropic_client import build_client
 from meridian.query.answer import ask
 from meridian.query.reranker import build_reranker
+from meridian.query.router import route
 from meridian.redaction.analyzer import build_analyzer_engine
 
 _ABSTAIN_MESSAGES = {
@@ -48,6 +51,27 @@ def main() -> None:
     client = build_client(config.llm_api_key) if config.llm_api_key else None
     if client is None:
         print("LLM_API_KEY is not set - showing retrieved context only, no answer will be generated.\n")
+
+    if client is not None:
+        # routing (stale threads / commitments / resolve / general) needs a
+        # real LLM call just to classify the message - with no client,
+        # skip straight to retrieval-only ask() below, same as always.
+        gmail_store = GmailStore(config.ingestion_dir / "gmail" / "gmail.db")
+        inbox_store = InboxIntelligenceStore(config.inbox_intelligence_dir / "commitments.db")
+        router_result = route(
+            args.question,
+            gmail_store=gmail_store,
+            inbox_store=inbox_store,
+            account_email=gmail_store.get_account_email(),
+            client=client,
+            model=args.model or config.llm_model,
+            analyzer=analyzer,
+            logger=logger,
+            audit_log_dir=config.log_dir,
+        )
+        if router_result.answer is not None:
+            print(router_result.answer)
+            return
 
     result = ask(
         args.question,

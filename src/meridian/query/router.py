@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal
+
+from meridian.inbox_intelligence.stale_threads import find_stale_threads
+from meridian.query.anthropic_client import call_claude
+from meridian.query.router_prompt import (
+    CLASSIFY_SYSTEM_PROMPT,
+    MATCH_RESOLVE_SYSTEM_PROMPT,
+    SUMMARIZE_STALE_THREADS_SYSTEM_PROMPT,
+    build_resolve_candidates_message,
+    build_stale_threads_user_message,
+)
+from meridian.redaction.tokenize import tokenize_for_external_call, untokenize
+from meridian.security.audit_log import record_event
+
+Intent = Literal["stale_threads", "commitments", "resolve", "general"]
+
+# a mailbox's full history can hold hundreds of ancient "stale" threads
+# (see inbox_intelligence's own real-data finding: 574 before this kind of
+# cap). Routing through natural language shouldn't dump that entire
+# backlog into every summarization/resolve-matching prompt - cap to a
+# recent, actually-relevant window by default. This mirrors the
+# stale-threads CLI's --max-days flag, just applied automatically instead
+# of asked of the user.
+_DEFAULT_MAX_DAYS_QUIET = 30
+
+
+@dataclass(frozen=True)
+class RouterResult:
+    intent: Intent
+    # None means: this intent wasn't (or couldn't be) handled here - the
+    # caller should fall through to query.answer.ask() as usual. Keeping
+    # that fallback in the caller avoids duplicating ask()'s own
+    # abstain-handling and formatting here.
+    answer: str | None
+
+
+def _call_llm(
+    *, client: Any, model: str, system: str, text: str, analyzer: Any,
+    max_tokens: int = 1024, logger: logging.Logger | None = None, audit_log_dir: Path | None = None,
+    operation: str,
+) -> str:
+    tokenization = tokenize_for_external_call(text, analyzer=analyzer, logger=logger)
+    if audit_log_dir is not None:
+        record_event(
+            audit_log_dir, "llm.external_call",
+            {"operation": operation, "entity_counts": tokenization.entity_counts},
+        )
+    raw = call_claude(
+        client, model=model, system=system, user_message=tokenization.tokenized_text,
+        max_tokens=max_tokens, logger=logger,
+    )
+    return untokenize(raw, tokenization.mapping)
+
+
+def classify_intent(
+    text: str, *, client: Any, model: str, analyzer: Any,
+    logger: logging.Logger | None = None, audit_log_dir: Path | None = None,
+) -> Intent:
+    response = _call_llm(
+        client=client, model=model, system=CLASSIFY_SYSTEM_PROMPT, text=text, analyzer=analyzer,
+        max_tokens=20, logger=logger, audit_log_dir=audit_log_dir, operation="query.router_classify",
+    )
+    normalized = response.strip().upper()
+    if "STALE_THREADS" in normalized:
+        return "stale_threads"
+    if "COMMITMENTS" in normalized:
+        return "commitments"
+    if "RESOLVE" in normalized:
+        return "resolve"
+    return "general"
+
+
+def _summarize_stale_threads(
+    text: str, threads: list[Any], *, client: Any, model: str, analyzer: Any,
+    logger: logging.Logger | None = None, audit_log_dir: Path | None = None,
+) -> str:
+    if not threads:
+        return "No threads are waiting on your reply right now."
+    user_message = build_stale_threads_user_message(text, threads)
+    return _call_llm(
+        client=client, model=model, system=SUMMARIZE_STALE_THREADS_SYSTEM_PROMPT, text=user_message,
+        analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir,
+        operation="query.router_stale_threads_summary",
+    )
+
+
+def _format_commitments(commitments: list[Any]) -> str:
+    """no LLM call needed - a commitment's description is already a short,
+    LLM-distilled fact from extraction time (see
+    inbox_intelligence/commitments.py), not raw email text, so it doesn't
+    need re-summarizing here."""
+    if not commitments:
+        return "No open commitments right now."
+    lines = []
+    for row in commitments:
+        who = "You" if row["made_by"] == "me" else row["other_party"]
+        due = f" (due {row['due_date']})" if row["due_date"] else ""
+        lines.append(f"{who}: {row['description']}{due}")
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class _ResolvableItem:
+    kind: Literal["thread", "commitment"]
+    item_id: str
+    label: str
+
+
+def _resolve_matching_item(
+    text: str, threads: list[Any], commitments: list[Any], inbox_store: Any,
+    *, client: Any, model: str, analyzer: Any,
+    logger: logging.Logger | None = None, audit_log_dir: Path | None = None,
+) -> str:
+    candidates: list[_ResolvableItem] = [
+        _ResolvableItem(kind="thread", item_id=thread.thread_id, label=f"Thread from {thread.last_sender}, subject '{thread.subject}'")
+        for thread in threads
+    ] + [
+        _ResolvableItem(kind="commitment", item_id=row["commitment_id"], label=row["description"])
+        for row in commitments
+    ]
+    if not candidates:
+        return "There's nothing open right now to mark as resolved."
+
+    user_message = build_resolve_candidates_message(text, [item.label for item in candidates])
+    response = _call_llm(
+        client=client, model=model, system=MATCH_RESOLVE_SYSTEM_PROMPT, text=user_message, analyzer=analyzer,
+        max_tokens=20, logger=logger, audit_log_dir=audit_log_dir, operation="query.router_resolve_match",
+    )
+    normalized = response.strip().upper()
+    if "NONE" in normalized:
+        return "I'm not sure which one you mean - could you be more specific?"
+
+    resolved_labels = []
+    for token in normalized.replace(" ", "").split(","):
+        if not token.isdigit():
+            continue
+        index = int(token) - 1
+        if not (0 <= index < len(candidates)):
+            continue
+        item = candidates[index]
+        if item.kind == "thread":
+            inbox_store.dismiss_thread(item.item_id)
+        else:
+            inbox_store.mark_resolved(item.item_id)
+        resolved_labels.append(item.label)
+
+    if not resolved_labels:
+        return "I'm not sure which one you mean - could you be more specific?"
+    return "Marked resolved: " + "; ".join(resolved_labels)
+
+
+def route(
+    text: str,
+    *,
+    gmail_store: Any,
+    inbox_store: Any,
+    account_email: str | None,
+    client: Any,
+    model: str,
+    analyzer: Any,
+    now: datetime | None = None,
+    logger: logging.Logger | None = None,
+    audit_log_dir: Path | None = None,
+) -> RouterResult:
+    """classifies a free-text message into stale_threads / commitments /
+    resolve / general, and directly answers the first three (general falls
+    through to query.answer.ask(), handled by the caller). This is the
+    "everything is a text message" entry point - a real frontend wouldn't
+    expose separate CLI subcommands per capability, it maps one text box
+    to whichever backend actually answers the question."""
+    now = now if now is not None else datetime.now(tz=timezone.utc)
+    intent = classify_intent(text, client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir)
+
+    if intent in ("stale_threads", "resolve") and account_email is None:
+        return RouterResult(
+            intent=intent,
+            answer="Account email not captured yet - run `python -m meridian.ingestion.gmail` first.",
+        )
+
+    if intent == "stale_threads":
+        threads = find_stale_threads(
+            gmail_store, account_email, now=now, max_days_quiet=_DEFAULT_MAX_DAYS_QUIET,
+            exclude_thread_ids=inbox_store.list_dismissed_thread_ids(),
+        )
+        answer = _summarize_stale_threads(
+            text, threads, client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir
+        )
+        return RouterResult(intent="stale_threads", answer=answer)
+
+    if intent == "commitments":
+        answer = _format_commitments(inbox_store.list_open_commitments())
+        return RouterResult(intent="commitments", answer=answer)
+
+    if intent == "resolve":
+        threads = find_stale_threads(
+            gmail_store, account_email, now=now, max_days_quiet=_DEFAULT_MAX_DAYS_QUIET,
+            exclude_thread_ids=inbox_store.list_dismissed_thread_ids(),
+        )
+        commitments = inbox_store.list_open_commitments()
+        answer = _resolve_matching_item(
+            text, threads, commitments, inbox_store,
+            client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir,
+        )
+        return RouterResult(intent="resolve", answer=answer)
+
+    return RouterResult(intent="general", answer=None)

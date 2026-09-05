@@ -1,14 +1,14 @@
-from meridian.inbox_intelligence.store import CommitmentStore
+from meridian.inbox_intelligence.store import InboxIntelligenceStore
 
 
 def test_is_message_scanned_false_before_marked(tmp_path):
-    store = CommitmentStore(tmp_path / "commitments.db")
+    store = InboxIntelligenceStore(tmp_path / "commitments.db")
 
     assert store.is_message_scanned("msg-1") is False
 
 
 def test_mark_message_scanned_roundtrip(tmp_path):
-    store = CommitmentStore(tmp_path / "commitments.db")
+    store = InboxIntelligenceStore(tmp_path / "commitments.db")
 
     store.mark_message_scanned("msg-1")
 
@@ -17,7 +17,7 @@ def test_mark_message_scanned_roundtrip(tmp_path):
 
 
 def test_mark_message_scanned_twice_is_idempotent(tmp_path):
-    store = CommitmentStore(tmp_path / "commitments.db")
+    store = InboxIntelligenceStore(tmp_path / "commitments.db")
 
     store.mark_message_scanned("msg-1")
     store.mark_message_scanned("msg-1")
@@ -26,7 +26,7 @@ def test_mark_message_scanned_twice_is_idempotent(tmp_path):
 
 
 def test_add_commitment_and_list_open(tmp_path):
-    store = CommitmentStore(tmp_path / "commitments.db")
+    store = InboxIntelligenceStore(tmp_path / "commitments.db")
 
     commitment_id = store.add_commitment(
         message_id="msg-1", thread_id="t-1", made_by="other", other_party="alice@example.com",
@@ -42,7 +42,7 @@ def test_add_commitment_and_list_open(tmp_path):
 
 
 def test_mark_resolved_removes_from_open_list(tmp_path):
-    store = CommitmentStore(tmp_path / "commitments.db")
+    store = InboxIntelligenceStore(tmp_path / "commitments.db")
     commitment_id = store.add_commitment(
         message_id="msg-1", thread_id="t-1", made_by="me", other_party="bob@example.com",
         description="I'll send the invoice", deadline_phrase=None, due_date=None,
@@ -55,13 +55,13 @@ def test_mark_resolved_removes_from_open_list(tmp_path):
 
 
 def test_mark_resolved_unknown_id_returns_false(tmp_path):
-    store = CommitmentStore(tmp_path / "commitments.db")
+    store = InboxIntelligenceStore(tmp_path / "commitments.db")
 
     assert store.mark_resolved("does-not-exist") is False
 
 
 def test_list_open_commitments_orders_by_due_date_nulls_last(tmp_path):
-    store = CommitmentStore(tmp_path / "commitments.db")
+    store = InboxIntelligenceStore(tmp_path / "commitments.db")
     store.add_commitment(
         message_id="m1", thread_id="t1", made_by="other", other_party="a@example.com",
         description="no deadline", deadline_phrase=None, due_date=None,
@@ -80,3 +80,27 @@ def test_list_open_commitments_orders_by_due_date_nulls_last(tmp_path):
     assert [row["description"] for row in open_commitments] == [
         "sooner deadline", "later deadline", "no deadline",
     ]
+
+
+def test_is_thread_dismissed_false_before_dismissed(tmp_path):
+    store = InboxIntelligenceStore(tmp_path / "commitments.db")
+
+    assert store.is_thread_dismissed("t1") is False
+
+
+def test_dismiss_thread_roundtrip(tmp_path):
+    store = InboxIntelligenceStore(tmp_path / "commitments.db")
+
+    store.dismiss_thread("t1")
+
+    assert store.is_thread_dismissed("t1") is True
+    assert store.list_dismissed_thread_ids() == frozenset({"t1"})
+
+
+def test_dismiss_thread_twice_is_idempotent(tmp_path):
+    store = InboxIntelligenceStore(tmp_path / "commitments.db")
+
+    store.dismiss_thread("t1")
+    store.dismiss_thread("t1")
+
+    assert store.list_dismissed_thread_ids() == frozenset({"t1"})

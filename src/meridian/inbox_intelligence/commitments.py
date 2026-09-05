@@ -10,7 +10,7 @@ from typing import Any
 from meridian.inbox_intelligence.commitment_prompt import SYSTEM_PROMPT, build_user_message
 from meridian.inbox_intelligence.deadlines import resolve_deadline_phrase
 from meridian.inbox_intelligence.gmail_filters import NON_ACTIONABLE_CATEGORIES, looks_like_auto_reply
-from meridian.inbox_intelligence.store import CommitmentStore
+from meridian.inbox_intelligence.store import InboxIntelligenceStore
 from meridian.query.anthropic_client import call_claude
 from meridian.query.date_range import parse_stored_date
 from meridian.redaction.tokenize import tokenize_for_external_call, untokenize
@@ -44,7 +44,7 @@ def _first_recipient(recipients_json: str | None) -> str:
     return recipients[0] if recipients else ""
 
 
-def _eligible_messages(gmail_store: Any, commitment_store: CommitmentStore, limit: int) -> list[Any]:
+def _eligible_messages(gmail_store: Any, commitment_store: InboxIntelligenceStore, limit: int) -> list[Any]:
     """most-recent-first, skipping already-scanned and non-conversational
     mail (promo/social/updates/forums categories, auto-replies) - no point
     spending an LLM call on a newsletter that will never contain a
@@ -67,7 +67,7 @@ def _eligible_messages(gmail_store: Any, commitment_store: CommitmentStore, limi
 
 def scan_for_commitments(
     gmail_store: Any,
-    commitment_store: CommitmentStore,
+    commitment_store: InboxIntelligenceStore,
     account_email: str,
     client: Any,
     model: str,

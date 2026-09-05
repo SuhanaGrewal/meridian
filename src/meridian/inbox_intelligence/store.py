@@ -24,6 +24,11 @@ CREATE TABLE IF NOT EXISTS scanned_messages (
     message_id TEXT PRIMARY KEY,
     scanned_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS dismissed_threads (
+    thread_id    TEXT PRIMARY KEY,
+    dismissed_at TEXT NOT NULL
+);
 """
 
 
@@ -45,7 +50,13 @@ class Commitment:
     detected_at: str
 
 
-class CommitmentStore:
+class InboxIntelligenceStore:
+    """persistence for the Inbox Intelligence track - commitments, scanned
+    messages, and dismissed (resolved/handled) stale threads. One store,
+    one file (data/inbox_intelligence/inbox_intelligence.db), since these
+    are all facets of the same "what does the user still need to act on"
+    concern, not separate subsystems."""
+
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path)
@@ -110,3 +121,20 @@ class CommitmentStore:
 
     def count_scanned_messages(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM scanned_messages").fetchone()[0]
+
+    def dismiss_thread(self, thread_id: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO dismissed_threads (thread_id, dismissed_at) VALUES (?, ?)",
+                (thread_id, _now()),
+            )
+
+    def is_thread_dismissed(self, thread_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM dismissed_threads WHERE thread_id = ?", (thread_id,)
+        ).fetchone()
+        return row is not None
+
+    def list_dismissed_thread_ids(self) -> frozenset[str]:
+        rows = self._conn.execute("SELECT thread_id FROM dismissed_threads").fetchall()
+        return frozenset(row["thread_id"] for row in rows)

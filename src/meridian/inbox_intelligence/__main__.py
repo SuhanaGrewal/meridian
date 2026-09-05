@@ -6,7 +6,7 @@ from meridian.common.config import ensure_dirs, load_config
 from meridian.common.logging import get_logger
 from meridian.inbox_intelligence.commitments import scan_for_commitments
 from meridian.inbox_intelligence.stale_threads import find_stale_threads
-from meridian.inbox_intelligence.store import CommitmentStore
+from meridian.inbox_intelligence.store import InboxIntelligenceStore
 from meridian.ingestion.gmail.store import GmailStore
 from meridian.query.anthropic_client import build_client
 from meridian.redaction.analyzer import build_analyzer_engine
@@ -97,7 +97,7 @@ def main() -> None:
             print("LLM_API_KEY is not set - commitment scanning needs a real Claude call, nothing to do.")
             return
 
-        commitment_store = CommitmentStore(config.inbox_intelligence_dir / "commitments.db")
+        commitment_store = InboxIntelligenceStore(config.inbox_intelligence_dir / "commitments.db")
         client = build_client(config.llm_api_key)
         analyzer = build_analyzer_engine()
 
@@ -108,7 +108,7 @@ def main() -> None:
         print(f"Scanned {stats.messages_scanned} message(s), found {stats.commitments_found} commitment(s).")
 
     elif args.command == "commitments":
-        commitment_store = CommitmentStore(config.inbox_intelligence_dir / "commitments.db")
+        commitment_store = InboxIntelligenceStore(config.inbox_intelligence_dir / "commitments.db")
         open_commitments = commitment_store.list_open_commitments()
         if not open_commitments:
             print("No open commitments.")
@@ -121,7 +121,7 @@ def main() -> None:
             print(f"- [{row['commitment_id']}] {who}: {row['description']}{due}")
 
     elif args.command == "resolve-commitment":
-        commitment_store = CommitmentStore(config.inbox_intelligence_dir / "commitments.db")
+        commitment_store = InboxIntelligenceStore(config.inbox_intelligence_dir / "commitments.db")
         if commitment_store.mark_resolved(args.commitment_id):
             print(f"Marked {args.commitment_id} as resolved.")
         else:

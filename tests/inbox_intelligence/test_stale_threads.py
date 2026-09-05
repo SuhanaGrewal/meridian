@@ -33,6 +33,17 @@ def test_thread_waiting_on_reply_is_flagged_stale(tmp_path):
     assert threads[0].days_quiet == 5
 
 
+def test_dismissed_thread_is_excluded(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(_message("m1", "t1", "Alice <alice@example.com>", "2024-06-05T00:00:00+00:00"))
+
+    threads = find_stale_threads(
+        store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3, exclude_thread_ids=frozenset({"t1"})
+    )
+
+    assert threads == []
+
+
 def test_thread_last_replied_by_account_owner_is_not_stale(tmp_path):
     store = GmailStore(tmp_path / "gmail.db")
     store.upsert_message(_message("m1", "t1", "Alice <alice@example.com>", "2024-06-01T00:00:00+00:00"))
@@ -165,12 +176,12 @@ def test_max_days_quiet_none_means_no_cap(tmp_path):
     assert len(threads) == 1
 
 
-def test_snippet_is_truncated_to_200_chars(tmp_path):
+def test_snippet_is_truncated_to_500_chars(tmp_path):
     store = GmailStore(tmp_path / "gmail.db")
     store.upsert_message(
-        _message("m1", "t1", "Alice <alice@example.com>", "2024-06-01T00:00:00+00:00", body_text="x" * 500)
+        _message("m1", "t1", "Alice <alice@example.com>", "2024-06-01T00:00:00+00:00", body_text="x" * 800)
     )
 
     threads = find_stale_threads(store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3)
 
-    assert len(threads[0].last_message_snippet) == 200
+    assert len(threads[0].last_message_snippet) == 500

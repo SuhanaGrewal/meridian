@@ -20,7 +20,8 @@ class StaleThread:
     days_quiet: int
 
 
-_SNIPPET_CHARS = 200
+_SNIPPET_CHARS = 500  # matches digest/gather.py's _DETAIL_CHARS - enough that a
+# summarizer isn't fed a sentence cut off mid-word
 
 
 def find_stale_threads(
@@ -30,6 +31,7 @@ def find_stale_threads(
     now: datetime | None = None,
     min_days_quiet: int = 3,
     max_days_quiet: int | None = None,
+    exclude_thread_ids: frozenset[str] = frozenset(),
 ) -> list[StaleThread]:
     """threads where the last message wasn't from the account owner and
     it's been quiet for at least min_days_quiet - i.e. "your move." A
@@ -41,12 +43,19 @@ def find_stale_threads(
     are excluded too - neither was ever actually waiting on a reply.
     max_days_quiet optionally caps how far
     back to look, since a mailbox's full history can surface
-    multi-year-old threads that are functionally dead, not pending."""
+    multi-year-old threads that are functionally dead, not pending.
+    exclude_thread_ids lets a caller hide threads the user already
+    dismissed as handled (see InboxIntelligenceStore.list_dismissed_thread_ids)
+    - dismissal is a caller concern, not something this pure function
+    persists itself."""
     now = now if now is not None else datetime.now(tz=timezone.utc)
     account_email_lower = account_email.strip().lower()
     results: list[StaleThread] = []
 
     for row in gmail_store.list_latest_message_per_thread():
+        if row["thread_id"] in exclude_thread_ids:
+            continue
+
         _, sender_email = parseaddr(row["sender"] or "")
         if sender_email.lower() == account_email_lower:
             continue
