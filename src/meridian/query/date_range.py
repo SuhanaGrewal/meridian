@@ -62,12 +62,20 @@ def extract_date_range(question: str, *, now: datetime) -> tuple[datetime, datet
         start = _start_of_week(now)
         return start, start + timedelta(days=7)
 
+    if re.search(r"\bnext week\b", text):
+        start = _start_of_week(now) + timedelta(days=7)
+        return start, start + timedelta(days=7)
+
     if re.search(r"\blast month\b", text):
         this_month_start = _start_of_month(now)
         return _add_months(this_month_start, -1), this_month_start
 
     if re.search(r"\bthis month\b", text):
         start = _start_of_month(now)
+        return start, _add_months(start, 1)
+
+    if re.search(r"\bnext month\b", text):
+        start = _add_months(_start_of_month(now), 1)
         return start, _add_months(start, 1)
 
     if re.search(r"\blast year\b", text):
@@ -78,6 +86,10 @@ def extract_date_range(question: str, *, now: datetime) -> tuple[datetime, datet
         start = _start_of_year(now)
         return start, start.replace(year=start.year + 1)
 
+    if re.search(r"\bnext year\b", text):
+        start = _start_of_year(now).replace(year=now.year + 1)
+        return start, start.replace(year=start.year + 1)
+
     match = re.search(r"\blast (\d+) days?\b", text)
     if match:
         days = int(match.group(1))
@@ -85,15 +97,36 @@ def extract_date_range(question: str, *, now: datetime) -> tuple[datetime, datet
         # window covers `days` calendar days total, including today
         return end - timedelta(days=days), end
 
+    match = re.search(r"\bnext (\d+) days?\b", text)
+    if match:
+        days = int(match.group(1))
+        start = _start_of_day(now)
+        # window covers `days` calendar days total, starting today - the
+        # forward-looking mirror of "last N days" above
+        return start, start + timedelta(days=days)
+
     for index, weekday_name in enumerate(_WEEKDAYS):
         if re.search(rf"\blast {weekday_name}\b", text):
             start = _most_recent_weekday(now, index) - timedelta(days=7)
             return start, start + timedelta(days=1)
 
     for index, weekday_name in enumerate(_WEEKDAYS):
+        if re.search(rf"\bnext {weekday_name}\b", text):
+            # the *next* occurrence strictly ahead: if today is that
+            # weekday, "next monday" means 7 days from now, not today.
+            start = _most_recent_weekday(now, index) + timedelta(days=7)
+            return start, start + timedelta(days=1)
+
+    for index, weekday_name in enumerate(_WEEKDAYS):
         if re.search(rf"\b{weekday_name}\b", text):
             start = _most_recent_weekday(now, index)
             return start, start + timedelta(days=1)
+
+    if re.search(r"\bupcoming\b", text):
+        # no more specific horizon given - a reasonable default forward
+        # window, same philosophy as query/router.py's _DEFAULT_MAX_DAYS_QUIET
+        start = _start_of_day(now)
+        return start, start + timedelta(days=30)
 
     return None
 

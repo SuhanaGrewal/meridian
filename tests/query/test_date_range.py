@@ -41,6 +41,13 @@ def test_this_month():
     assert end == datetime(2024, 7, 1, tzinfo=timezone.utc)
 
 
+def test_next_week():
+    start, end = extract_date_range("what's on my calendar next week", now=_NOW)
+
+    assert start == datetime(2024, 6, 17, tzinfo=timezone.utc)  # monday after this week
+    assert end == datetime(2024, 6, 24, tzinfo=timezone.utc)
+
+
 def test_last_month():
     start, end = extract_date_range("what happened last month", now=_NOW)
 
@@ -57,6 +64,22 @@ def test_last_month_handles_year_rollover():
     assert end == datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
+def test_next_month():
+    start, end = extract_date_range("what's due next month", now=_NOW)
+
+    assert start == datetime(2024, 7, 1, tzinfo=timezone.utc)
+    assert end == datetime(2024, 8, 1, tzinfo=timezone.utc)
+
+
+def test_next_month_handles_year_rollover():
+    now = datetime(2024, 12, 15, tzinfo=timezone.utc)
+
+    start, end = extract_date_range("next month", now=now)
+
+    assert start == datetime(2025, 1, 1, tzinfo=timezone.utc)
+    assert end == datetime(2025, 2, 1, tzinfo=timezone.utc)
+
+
 def test_this_year():
     start, end = extract_date_range("summary of this year", now=_NOW)
 
@@ -71,11 +94,26 @@ def test_last_year():
     assert end == datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
+def test_next_year():
+    start, end = extract_date_range("plans for next year", now=_NOW)
+
+    assert start == datetime(2025, 1, 1, tzinfo=timezone.utc)
+    assert end == datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
 def test_last_n_days_includes_today():
     start, end = extract_date_range("emails from the last 3 days", now=_NOW)
 
     assert start == datetime(2024, 6, 10, tzinfo=timezone.utc)
     assert end == datetime(2024, 6, 13, tzinfo=timezone.utc)
+    assert (end - start).days == 3
+
+
+def test_next_n_days_starts_today():
+    start, end = extract_date_range("what's happening in the next 3 days", now=_NOW)
+
+    assert start == datetime(2024, 6, 12, tzinfo=timezone.utc)  # today
+    assert end == datetime(2024, 6, 15, tzinfo=timezone.utc)
     assert (end - start).days == 3
 
 
@@ -91,6 +129,30 @@ def test_bare_weekday_before_today_in_same_week():
     start, end = extract_date_range("meeting on monday", now=_NOW)
 
     assert start == datetime(2024, 6, 10, tzinfo=timezone.utc)
+
+
+def test_next_weekday_when_today_is_a_different_day():
+    # _NOW is wednesday; "next monday" should be the monday after this week
+    start, end = extract_date_range("meeting next monday", now=_NOW)
+
+    assert start == datetime(2024, 6, 17, tzinfo=timezone.utc)
+    assert end == datetime(2024, 6, 18, tzinfo=timezone.utc)
+
+
+def test_next_weekday_when_today_is_that_weekday_means_a_week_from_now():
+    # _NOW is wednesday - "next wednesday" said on a wednesday should mean
+    # a week from today, not today itself
+    start, end = extract_date_range("meeting next wednesday", now=_NOW)
+
+    assert start == datetime(2024, 6, 19, tzinfo=timezone.utc)
+    assert end == datetime(2024, 6, 20, tzinfo=timezone.utc)
+
+
+def test_upcoming_defaults_to_a_30_day_forward_window():
+    start, end = extract_date_range("what's upcoming", now=_NOW)
+
+    assert start == datetime(2024, 6, 12, tzinfo=timezone.utc)  # today
+    assert end == datetime(2024, 7, 12, tzinfo=timezone.utc)
 
 
 def test_last_weekday_means_previous_calendar_week():
