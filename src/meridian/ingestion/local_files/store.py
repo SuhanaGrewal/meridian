@@ -109,7 +109,14 @@ class NotesStore:
         return self._conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
 
     def list_notes_updated_since(self, since: str) -> list[sqlite3.Row]:
+        """filters on mtime_ns (the file's real filesystem modified time),
+        not updated_at (when this row was last written locally) - same
+        reasoning as gmail's list_messages_since: updated_at reflects sync
+        time, not content age, so it would make every note look "new" for
+        24h after any full scan regardless of how old the file actually
+        is."""
+        since_mtime_ns = int(datetime.fromisoformat(since).timestamp() * 1_000_000_000)
         return self._conn.execute(
-            "SELECT * FROM notes WHERE updated_at >= ? AND is_deleted = 0 ORDER BY updated_at",
-            (since,),
+            "SELECT * FROM notes WHERE mtime_ns >= ? AND is_deleted = 0 ORDER BY mtime_ns",
+            (since_mtime_ns,),
         ).fetchall()

@@ -1,17 +1,15 @@
-from datetime import datetime, timezone
-
 from meridian.ingestion.gmail.message_parser import ParsedMessage
 from meridian.ingestion.gmail.store import GmailStore
 
 
-def _message(message_id="msg-1", label_ids=None, body_text="hello") -> ParsedMessage:
+def _message(message_id="msg-1", label_ids=None, body_text="hello", sent_at="2024-01-01T00:00:00+00:00") -> ParsedMessage:
     return ParsedMessage(
         message_id=message_id,
         thread_id="thread-1",
         subject="Subject",
         sender="alice@example.com",
         recipients=["bob@example.com"],
-        sent_at="2024-01-01T00:00:00+00:00",
+        sent_at=sent_at,
         body_text=body_text,
         label_ids=label_ids or ["INBOX"],
         content_hash="hash-1",
@@ -116,23 +114,26 @@ def test_get_all_messages_returns_every_non_deleted_message(tmp_path):
     assert rows[0]["message_id"] == "msg-1"
 
 
-def test_list_messages_since_excludes_messages_updated_before_cutoff(tmp_path):
+def test_list_messages_since_excludes_messages_sent_before_cutoff(tmp_path):
+    """filters on sent_at (the message's real send date), not on when the
+    row happened to be written locally - a full backfill writes every
+    message "now" regardless of how old it actually is, so filtering on
+    local write time would make every message look new for 24h after any
+    backfill."""
     store = GmailStore(tmp_path / "gmail.db")
-    store.upsert_message(_message(message_id="msg-old"))
-    cutoff = datetime.now(tz=timezone.utc).isoformat()
-    store.upsert_message(_message(message_id="msg-new"))
+    store.upsert_message(_message(message_id="msg-old", sent_at="2023-01-01T00:00:00+00:00"))
+    store.upsert_message(_message(message_id="msg-new", sent_at="2024-06-01T00:00:00+00:00"))
 
-    rows = store.list_messages_since(cutoff)
+    rows = store.list_messages_since("2024-01-01T00:00:00+00:00")
 
     assert {row["message_id"] for row in rows} == {"msg-new"}
 
 
 def test_list_messages_since_excludes_deleted_messages(tmp_path):
     store = GmailStore(tmp_path / "gmail.db")
-    cutoff = datetime.now(tz=timezone.utc).isoformat()
-    store.upsert_message(_message(message_id="msg-1"))
+    store.upsert_message(_message(message_id="msg-1", sent_at="2024-06-01T00:00:00+00:00"))
     store.mark_deleted("msg-1")
 
-    rows = store.list_messages_since(cutoff)
+    rows = store.list_messages_since("2024-01-01T00:00:00+00:00")
 
     assert rows == []

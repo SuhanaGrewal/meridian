@@ -43,7 +43,7 @@ def _doc() -> ParsedDoc:
 def _note() -> ParsedNote:
     return ParsedNote(
         path="note.txt", content_text="note details", content_hash="hash-1",
-        size_bytes=10, mtime_ns=1,
+        size_bytes=10, mtime_ns=int(datetime(2024, 6, 7, tzinfo=timezone.utc).timestamp() * 1_000_000_000),
     )
 
 

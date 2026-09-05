@@ -154,7 +154,12 @@ class GmailStore:
         return self._conn.execute("SELECT * FROM messages WHERE is_deleted = 0").fetchall()
 
     def list_messages_since(self, since: str) -> list[sqlite3.Row]:
+        """filters on sent_at (the message's real send date), not
+        updated_at (when this row was last written locally) - otherwise
+        every message ever ingested would look "new" for 24h after any
+        full backfill, since a backfill sets updated_at to the sync time
+        regardless of how old the message actually is."""
         return self._conn.execute(
-            "SELECT * FROM messages WHERE updated_at >= ? AND is_deleted = 0 ORDER BY sent_at",
+            "SELECT * FROM messages WHERE sent_at >= ? AND is_deleted = 0 ORDER BY sent_at",
             (since,),
         ).fetchall()

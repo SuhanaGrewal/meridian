@@ -144,23 +144,29 @@ def test_count_notes(tmp_path):
     assert store.count_notes() == 2
 
 
-def test_list_notes_updated_since_excludes_notes_updated_before_cutoff(tmp_path):
+def test_list_notes_updated_since_excludes_notes_modified_before_cutoff(tmp_path):
+    """filters on mtime_ns (the file's real filesystem modified time), not
+    on when the row happened to be written locally - a full scan writes
+    every note "now" regardless of how old the file actually is, so
+    filtering on local write time would make every note look new for 24h
+    after any scan."""
     store = NotesStore(tmp_path / "local_files.db")
-    store.upsert_note(_note(path="old.txt"))
-    cutoff = datetime.now(tz=timezone.utc).isoformat()
-    store.upsert_note(_note(path="new.txt"))
+    old_mtime_ns = int(datetime(2023, 1, 1, tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+    new_mtime_ns = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+    store.upsert_note(_note(path="old.txt", mtime_ns=old_mtime_ns))
+    store.upsert_note(_note(path="new.txt", mtime_ns=new_mtime_ns))
 
-    rows = store.list_notes_updated_since(cutoff)
+    rows = store.list_notes_updated_since("2024-01-01T00:00:00+00:00")
 
     assert {row["path"] for row in rows} == {"new.txt"}
 
 
 def test_list_notes_updated_since_excludes_deleted_notes(tmp_path):
     store = NotesStore(tmp_path / "local_files.db")
-    cutoff = datetime.now(tz=timezone.utc).isoformat()
-    store.upsert_note(_note(path="a.txt"))
+    new_mtime_ns = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+    store.upsert_note(_note(path="a.txt", mtime_ns=new_mtime_ns))
     store.mark_deleted("a.txt")
 
-    rows = store.list_notes_updated_since(cutoff)
+    rows = store.list_notes_updated_since("2024-01-01T00:00:00+00:00")
 
     assert rows == []
