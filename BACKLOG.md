@@ -63,6 +63,19 @@ incrementally.
   page-by-page instead of only at the end, so a crash partway through a
   large mailbox doesn't force a full restart.
 
+## Fixed
+
+### 8. Digest read like a curated newsletter, not a quick status update — FIXED
+`digest/prompt.py`'s system prompt said "group related items together...
+keep skimmable in under a minute" - pushed Claude toward thematic
+categories with markdown headers, bold titles, and emoji section icons
+(📚🎓🎁⏰), reading like a blog digest rather than a personal heads-up.
+Rewrote the prompt: plain prose, no markdown/emoji, organized by source
+(calendar, email, docs, notes) not topic, one line for "nothing new"
+sources instead of silent omission, routine noise (newsletters) condensed
+to a count instead of listed item-by-item, and anomalies (unusual charges,
+security alerts, stalled threads) called out directly.
+
 ## Also found, not yet actioned
 
 ### 3. No scheduler — nothing runs automatically
