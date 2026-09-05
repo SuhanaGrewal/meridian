@@ -649,3 +649,28 @@ there's no automatic fulfillment detection.
 
 Merging context across threads about the same thing/person, and drafting
 replies in your voice, are tracked in `BACKLOG.md`, not yet built.
+
+### Talking to it in plain language
+
+The commands above still exist, but you don't need to know them - `python
+-m meridian.query "<anything>"` routes your question to the right place
+automatically:
+
+```
+python -m meridian.query "hey any thread needs my approval"
+python -m meridian.query "what commitments are open"
+python -m meridian.query "mark the laptop drop-off commitment as done"
+python -m meridian.query "when did I fly to London"
+```
+
+One cheap Claude call classifies the question (stale threads / open
+commitments / "mark this resolved" / a genuine fact question) before
+routing. Stale threads come back as a natural summary in prose, not a raw
+email dump - it'll only quote the actual message text if you explicitly
+ask to see it. A "mark as resolved" request is matched against your
+currently open threads and commitments; if it's ambiguous (e.g. the same
+email produced both a stale thread and a tracked commitment), it asks you
+to be more specific rather than guessing. Once dismissed, a thread stays
+hidden from future `stale-threads` results (`InboxIntelligenceStore`
+persists this - stale threads used to be recomputed fresh every time with
+no memory of what you'd already handled).

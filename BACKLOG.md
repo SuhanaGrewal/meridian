@@ -6,6 +6,15 @@ we find more. Nothing here is scheduled until explicitly picked up.
 
 ## Next up
 
+### 18. Fold stale threads / open commitments into the daily digest
+Requested alongside the router (#17): the digest should also mention
+threads needing approval and open commitments, not just new
+activity/upcoming calendar. Not built yet - `digest/gather.py` would need
+to call `find_stale_threads()`/`InboxIntelligenceStore.list_open_commitments()`
+and fold the results into `GatheredItem`s (or a dedicated section), likely
+reusing the same "summarize, don't dump raw text" approach `query/router.py`
+already uses for the same data.
+
 ### 1. "Upcoming/future" date filtering (recency-aware answers fixed, explicit phrase filtering still open)
 Two distinct halves. **Fixed**: the answer-framing half — asking "what
 flight bookings do I have" used to present an already-happened May 2026
@@ -136,6 +145,59 @@ background process or a very frequent scheduled check (e.g. every minute)
 
 ## Fixed
 
+### 19. Commitment scanner flagged boilerplate SLA text as a real promise
+Requested: an email about a hotel booking from 2 months ago was coming in
+as a tracked commitment - needed a better filter. Root cause wasn't
+really about hotel bookings: the hotel's confirmation email had a
+standard boilerplate line ("we acknowledge emails within 2 hours during
+business hours, 9am-6pm") which is generic policy text applied to every
+customer, not a specific promise made in response to this exchange.
+Tightened `commitment_prompt.py` to explicitly exclude that pattern - the
+test is now "did the sender promise, specifically and in response to
+something in THIS exchange, to personally do something" vs. a standing
+policy/SLA statement. Verified against real data: the two boilerplate-SLA
+false positives are gone, the remaining commitments are all genuine.
+
+Also: `digest/gather.py` gained a synthetic count item ("N additional
+email(s) arrived in Promotions/Social/Updates/Forums") since the digest
+now fully excludes those categories (#16) and had no way left to mention
+how many arrived - requested separately, alongside #16.
+
+### 17. Natural-language router: "everything is a text message"
+Requested: instead of separate CLI subcommands per capability, a single
+text message should map to whichever backend actually answers it - "any
+thread needs my approval" should surface stale threads, without the user
+needing to know `stale-threads` exists as a command. `python -m
+meridian.query` now runs every question through `query/router.py` first
+(one cheap Claude call to classify into stale_threads / commitments /
+resolve / general) before falling through to the unchanged `ask()`
+pipeline for genuine fact questions.
+
+- **stale_threads**: summarizes in prose, never dumps the raw email
+  (per this same request's other ask) - the model describes each
+  thread in its own words and only quotes the message if the user's
+  question explicitly asks to see it. Capped to a 30-day window by
+  default (unbounded would resurface the same hundreds-of-ancient-
+  threads problem #13 already fixed for the standalone CLI command -
+  a real test on this router caught it doing exactly that, citations
+  up to [170], before the cap was added).
+- **commitments**: formatted directly, no extra LLM call - a
+  commitment's description is already a distilled fact from extraction
+  time, not raw text needing summarizing.
+- **resolve**: matches the user's message against combined open
+  threads + commitments via one more Claude call, then dismisses/
+  resolves whichever matched, or asks for clarification rather than
+  guessing when ambiguous - confirmed for real: "the billy wardrop
+  thread is resolved" was correctly treated as ambiguous (the same
+  email produced both a stale-thread entry and a commitment entry) and
+  asked for clarification instead of guessing wrong; "mark the laptop
+  drop-off commitment as done" correctly matched and persisted.
+
+New `InboxIntelligenceStore.dismiss_thread()` gives stale threads the
+same persisted resolved-state commitments already had (previously
+stale-threads had zero persistence - purely computed live every call).
+`CommitmentStore` renamed to `InboxIntelligenceStore` to reflect that.
+
 ### 16. Digest surfaced promotional email instead of just the primary inbox
 Requested: exclude promotional emails from the digest, "basically primary,
 based on priority." `digest/gather.py` now excludes gmail's own
@@ -247,17 +309,19 @@ message's `TimeoutError` mid-sync. Fixed by catching `TimeoutError`/
 
 ## Also found, not yet actioned
 
-### 4. `query` can't handle broad/open-ended asks
+### 4. `query` can't handle broad/open-ended asks (routing infrastructure now exists, this specific case still doesn't)
 Questions like "summarize my recent emails" or "what is my CV like"
 structurally can't be answered well by the fact-lookup retrieval path (it
 scores individual small chunks against the question — no single chunk is
 "about" a broad meta-question, so it correctly abstains rather than
 hallucinate). The `digest` command is the right tool for "gather recent
-stuff," but there's no routing between the two — a user has to already know
-which tool fits which question shape.
-- Possible fix: a lightweight router in front of `query` that detects a
-  broad/summarization-shaped question and redirects to gather-style
-  retrieval (everything in a window) instead of top-k relevance search.
+stuff."
+- `query/router.py` (see #17, below) is now exactly the "lightweight
+  router in front of query" this item originally proposed - but it
+  currently only recognizes stale_threads/commitments/resolve/general.
+  Extending it with a fifth "broad summarization" intent that redirects
+  to gather-style retrieval is a natural, now-easy follow-up, not yet
+  done.
 
 ### 5. No consumer-facing interface
 CLI-only today — no chat window, no notifications when a digest is ready.
