@@ -27,9 +27,9 @@ What it'd take:
 - Calendar is the straightforward case: `start_at` is a real forward-dated
   field, so "upcoming calendar events" is a clean, achievable filter today.
 
-## Also found, not yet actioned
+## Fixed
 
-### 7. Digest crashes on first run after any full backfill (prompt too long)
+### 7. Digest crashes on first run after any full backfill (prompt too long) — FIXED
 `digest/gather.py` asks each source's store for "what's new since `since`."
 `gmail/store.py::list_messages_since` and `local_files/store.py`'s
 equivalent both filter on `updated_at` (when the row was last written to
@@ -47,7 +47,7 @@ the doc's real Google-side edit date.
 - No workaround via CLI flags — `--lookback-hours` doesn't help, since the
   bug is in the WHERE clause itself, not the window calculation.
 
-### 2. Network timeouts crash the whole sync instead of retrying
+### 2. Network timeouts crash the whole sync instead of retrying — FIXED
 `common/google_api.py`'s `execute_with_retry` only retries `RateLimitedError`
 and `TransientHttpError` — a raw connection-level timeout (no HTTP response
 at all) isn't either of those, so it isn't retried and crashes the entire
@@ -62,6 +62,8 @@ incrementally.
 - Related, smaller: consider checkpointing `_full_backfill`'s progress
   page-by-page instead of only at the end, so a crash partway through a
   large mailbox doesn't force a full restart.
+
+## Also found, not yet actioned
 
 ### 3. No scheduler — nothing runs automatically
 Every command (ingestion, indexing, digest) is one-shot, run-by-hand only.
