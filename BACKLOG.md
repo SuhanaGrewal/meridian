@@ -88,15 +88,6 @@ in whatever review flow surfaces these (today's `digest review
 explicit go-ahead before starting, not just folding into a larger feature
 bundle.
 
-### 12. Calendar notifications
-Requested: proactive alerts (e.g. "meeting in 15 minutes"), not just
-seeing upcoming events in a digest. Different from a periodic sync/digest
-job - needs something checking the calendar close to real-time and firing
-a native OS notification, which means either a genuinely long-running
-background process or a very frequent scheduled check (e.g. every minute)
-- worth scoping the tradeoff before picking an approach. Related to #5
-(no consumer-facing interface) - likely shares infrastructure with a
-"digest is ready" notification if #5 is ever built.
 
 ## Fixed
 
@@ -236,6 +227,42 @@ Verified against real data end to end: "remind me to meet with Nick"
 correctly classified as REMINDER, recorded, and proposed a real open slot
 from the actual calendar; "mark the accountant reminder as resolved"
 correctly matched and dismissed it via the router's RESOLVE path.
+
+### 12. Calendar notifications
+Requested: proactive alerts (e.g. "meeting in 15 minutes"), not just
+seeing upcoming events in a digest. Scoping this required picking between
+a genuinely long-running background process and a very frequent scheduled
+check - went with the latter: a one-shot `python -m meridian.notifications
+check` invoked every minute via a new launchd job
+(`com.meridian.calendarnotify`, `StartInterval` 60), consistent with this
+project's existing architecture where every phase is a one-shot CLI
+scheduled externally, not an in-process daemon. A genuine daemon would
+need its own process supervision, crash-restart, and log-rotation
+handling for a single-user personal tool - not worth it just to shave the
+alert lead time from "within the last minute" to "instant."
+
+New `notifications/calendar_watch.py::check_upcoming_events()` finds
+events starting within a configurable lead time (default 15 min,
+`CALENDAR_NOTIFY_LEAD_MINUTES` in `.env`) that haven't been notified about
+yet, and `notifications/store.py::NotificationStore` (`data/notifications/
+notifications.db`) dedupes across the once-a-minute checks so the same
+event doesn't re-alert every minute between the lead time and its actual
+start. `notifications/notifier.py::send_native_notification()` fires a
+real macOS notification via `osascript` - no extra dependency, ships with
+every Mac - with the event summary escaped before interpolation into the
+AppleScript literal. All-day events are excluded ("starts in 15 minutes"
+doesn't mean anything for them).
+
+`scripts/install_launchd.sh`/`uninstall_launchd.sh` updated to install/
+remove the new job alongside auto-sync and the nightly digest. Verified
+against real data: `send_native_notification()` fired a genuine macOS
+notification banner; `python -m meridian.notifications check` ran
+correctly against the real calendar (0 events in the next 30 days, so 0
+notifications - confirmed correct by checking the raw calendar data
+directly, not just trusting the "0" output).
+
+Related to #5 (no consumer-facing interface) - would share infrastructure
+with a "digest is ready" notification if #5 is ever built.
 
 ### 17. Natural-language router: "everything is a text message"
 Requested: instead of separate CLI subcommands per capability, a single

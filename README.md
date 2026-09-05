@@ -601,13 +601,13 @@ Run the real one (costs a small amount of real API usage):
 LLM_API_KEY=<key> MERIDIAN_RUN_LIVE_LLM_TESTS=1 pytest tests/eval/test_answer_eval_real.py -v
 ```
 
-## Scheduling (auto-sync & nightly digest)
+## Scheduling (auto-sync, nightly digest & calendar notifications)
 
 Every command in this project is a one-shot CLI with no built-in scheduler
 (see `CLAUDE.md`'s "production-rigor" principle — this is deliberate, not
-an oversight). To actually get every source syncing automatically and a digest
-generated nightly, `scripts/install_launchd.sh` installs two macOS
-`launchd` agents:
+an oversight). To actually get every source syncing automatically, a digest
+generated nightly, and calendar notifications firing, `scripts/install_launchd.sh`
+installs three macOS `launchd` agents:
 
 ```
 ./scripts/install_launchd.sh
@@ -624,15 +624,26 @@ generated nightly, `scripts/install_launchd.sh` installs two macOS
   `DIGEST_DAYS=mon,wed,fri`) — this is checked by `scripts/nightly_digest.sh`
   itself, so changing it takes effect on the next firing with no need to
   reinstall the job. Leave `DIGEST_DAYS` empty to run every day.
+- **Calendar notifications every minute** — a native macOS notification
+  for any calendar event starting within a lead time (default 15 minutes,
+  `CALENDAR_NOTIFY_LEAD_MINUTES` in `.env`). This is a one-shot check
+  re-run every minute (via `StartInterval`), not a long-running background
+  process — this project has no in-process daemon infrastructure anywhere,
+  and a genuine daemon would need its own crash-restart and log-rotation
+  handling for what's ultimately a personal, single-user tool. A
+  `data/notifications/notifications.db` store dedupes so the same event
+  doesn't re-alert on every check between the lead time and its actual
+  start.
 
 Safe to re-run `install_launchd.sh` any time (e.g. after changing
 `DIGEST_HOUR`) — it reloads cleanly instead of erroring on an
 already-installed job, and cleans up the older Gmail-only job name if
 you'd installed that before every source was covered. Logs land in
-`logs/launchd-autosync.log` and `logs/launchd-digest.log`, separate from
-Meridian's own structured log.
+`logs/launchd-autosync.log`, `logs/launchd-digest.log`, and
+`logs/launchd-calendarnotify.log`, separate from Meridian's own
+structured log.
 
-Remove both jobs with:
+Remove all three jobs with:
 
 ```
 ./scripts/uninstall_launchd.sh
