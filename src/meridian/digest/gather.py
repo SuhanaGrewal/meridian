@@ -1,11 +1,30 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 from meridian.digest.state import GatheredItem
+from meridian.inbox_intelligence.gmail_filters import NON_ACTIONABLE_CATEGORIES
 
 _DETAIL_CHARS = 500
+
+
+def _gmail_messages_for_digest(gmail_store: Any, since: str) -> list[Any]:
+    """excludes promotional/social/updates/forums mail (gmail's own
+    category labels) - a digest should reflect your primary inbox, not
+    surface newsletters. What's left is sorted so gmail's own
+    IMPORTANT-labeled mail comes first - that's a real priority signal,
+    not just "arrived most recently." The sort is stable, so chronological
+    order is preserved within the important/not-important groups."""
+    candidates = []
+    for row in gmail_store.list_messages_since(since):
+        labels = set(json.loads(row["label_ids"] or "[]"))
+        if labels & NON_ACTIONABLE_CATEGORIES:
+            continue
+        candidates.append(("IMPORTANT" not in labels, row))
+    candidates.sort(key=lambda pair: pair[0])
+    return [row for _, row in candidates]
 
 
 def _gmail_item(row: Any) -> GatheredItem:
@@ -67,7 +86,7 @@ def gather_items(
     `lookahead_end`), since that's what's actually useful in a personal
     digest."""
     items: list[GatheredItem] = []
-    items += [_gmail_item(row) for row in gmail_store.list_messages_since(since)]
+    items += [_gmail_item(row) for row in _gmail_messages_for_digest(gmail_store, since)]
     items += [_calendar_item(row) for row in calendar_store.list_events_upcoming(now, lookahead_end)]
     items += [_docs_item(row) for row in docs_store.list_docs_modified_since(since)]
     items += [_notes_item(row) for row in notes_store.list_notes_updated_since(since)]

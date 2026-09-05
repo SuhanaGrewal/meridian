@@ -12,7 +12,10 @@ _KEY = Fernet.generate_key()
 
 
 def _gmail_row():
-    return {"sender": "jane@example.com", "sent_at": "2024-06-05T00:00:00Z", "subject": "Budget", "body_text": "hello"}
+    return {
+        "sender": "jane@example.com", "sent_at": "2024-06-05T00:00:00Z", "subject": "Budget", "body_text": "hello",
+        "label_ids": '["INBOX"]',
+    }
 
 
 class _FakeStores:
