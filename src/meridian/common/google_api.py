@@ -44,6 +44,11 @@ def execute_with_retry(
     exactly, then still go through retry_with_backoff for attempt-counting
     and its own exponential delay. 5xx errors are retried the same way.
     Everything else (400/401/non-quota 403/404) propagates immediately.
+
+    A raw connection-level failure (TimeoutError, ConnectionError - the
+    request never got as far as an HTTP response at all) is just as
+    transient as a 5xx and is retried the same way, rather than crashing
+    the whole sync on one network blip.
     """
 
     def attempt() -> Any:
@@ -73,6 +78,8 @@ def execute_with_retry(
                 raise TransientHttpError(str(exc)) from exc
 
             raise
+        except (TimeoutError, ConnectionError) as exc:
+            raise TransientHttpError(str(exc)) from exc
 
     return retry_with_backoff(
         attempt,

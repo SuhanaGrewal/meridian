@@ -87,6 +87,32 @@ def test_permanent_errors_propagate_without_retry(monkeypatch, status, reason):
         execute_with_retry(request, max_attempts=3, base_delay=0.01)
 
 
+def test_connection_timeout_is_retried_then_succeeds(monkeypatch):
+    monkeypatch.setattr("meridian.common.retry.time.sleep", lambda s: None)
+    request = _FakeRequest([TimeoutError("The read operation timed out"), "ok"])
+
+    result = execute_with_retry(request, max_attempts=3, base_delay=0.01)
+
+    assert result == "ok"
+
+
+def test_connection_error_is_retried_then_succeeds(monkeypatch):
+    monkeypatch.setattr("meridian.common.retry.time.sleep", lambda s: None)
+    request = _FakeRequest([ConnectionError("connection reset"), "ok"])
+
+    result = execute_with_retry(request, max_attempts=3, base_delay=0.01)
+
+    assert result == "ok"
+
+
+def test_connection_timeout_exhausts_retries_and_raises(monkeypatch):
+    monkeypatch.setattr("meridian.common.retry.time.sleep", lambda s: None)
+    request = _FakeRequest([TimeoutError("timeout"), TimeoutError("timeout"), TimeoutError("timeout")])
+
+    with pytest.raises(RetryExhaustedError):
+        execute_with_retry(request, max_attempts=3, base_delay=0.01)
+
+
 def test_retries_exhausted_raises_retry_exhausted_error(monkeypatch):
     monkeypatch.setattr("meridian.common.retry.time.sleep", lambda s: None)
     request = _FakeRequest([_http_error(503), _http_error(503), _http_error(503)])
