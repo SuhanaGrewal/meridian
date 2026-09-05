@@ -417,6 +417,13 @@ sqlite3 data/digest/digest.db "select run_id, status, window_start, window_end f
 raw `select digest_text ...` will show ciphertext; use
 `python -m meridian.digest review` to see the plaintext digest.
 
+Gmail content in the digest is filtered to your Primary inbox - gmail's
+own CATEGORY_PROMOTIONS/SOCIAL/UPDATES/FORUMS labels are excluded
+entirely, matching Gmail's own Primary tab (not just ads: a LinkedIn
+invitation or shipping notification tagged CATEGORY_SOCIAL/UPDATES is
+excluded too, by design). What's left is sorted so gmail's own
+IMPORTANT-labeled mail comes first.
+
 ### Phase 11 (Security)
 
 A cross-cutting phase touching several earlier ones, addressing five

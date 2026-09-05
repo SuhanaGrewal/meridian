@@ -136,6 +136,21 @@ background process or a very frequent scheduled check (e.g. every minute)
 
 ## Fixed
 
+### 16. Digest surfaced promotional email instead of just the primary inbox
+Requested: exclude promotional emails from the digest, "basically primary,
+based on priority." `digest/gather.py` now excludes gmail's own
+CATEGORY_PROMOTIONS/SOCIAL/UPDATES/FORUMS labels (reusing the
+`NON_ACTIONABLE_CATEGORIES` concept already built for
+inbox_intelligence's stale-threads/commitments) and sorts what remains
+so IMPORTANT-labeled mail comes first.
+
+Real test against a real pending digest (3 promotions + a LinkedIn
+invitation + an Uber feedback request) surfaced a real tradeoff before
+finalizing: the LinkedIn invitation is tagged CATEGORY_SOCIAL, not
+CATEGORY_PROMOTIONS - a strict 4-category exclusion removes it too, not
+just the ads. Confirmed with the user this is the intended behavior
+(strict Primary-tab match, not "ads only") before shipping it.
+
 ### 14. Soft-commitment tracking ("I'll send this by Friday" → trackable follow-up)
 Second piece of Inbox Intelligence. `python -m meridian.inbox_intelligence
 scan-commitments` (costs real LLM usage, bounded by `--limit`) detects a
