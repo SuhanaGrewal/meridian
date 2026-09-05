@@ -1,4 +1,4 @@
-from meridian.inbox_intelligence.commitments import scan_for_commitments
+from meridian.inbox_intelligence.commitments import _looks_like_boilerplate_policy, scan_for_commitments
 from meridian.inbox_intelligence.store import InboxIntelligenceStore
 from meridian.ingestion.gmail.message_parser import ParsedMessage
 from meridian.ingestion.gmail.store import GmailStore
@@ -186,6 +186,38 @@ def test_scan_respects_limit(tmp_path):
     )
 
     assert stats.messages_scanned == 2
+
+
+def test_looks_like_boilerplate_policy_detects_common_sla_phrasing():
+    assert _looks_like_boilerplate_policy("We acknowledge emails within 2 hours during business hours.", None)
+    assert _looks_like_boilerplate_policy("Our support team typically responds within 24 hours.", None)
+    assert _looks_like_boilerplate_policy("Standard response time is one business day.", None)
+    assert _looks_like_boilerplate_policy("Alice will send the report", "within 2 hours during operational hours")
+
+
+def test_looks_like_boilerplate_policy_does_not_flag_genuine_commitments():
+    assert not _looks_like_boilerplate_policy("Alice will send the report", "by Friday")
+    assert not _looks_like_boilerplate_policy("I will drop off the laptop at the office", "tomorrow")
+
+
+def test_scan_filters_out_boilerplate_policy_even_if_the_llm_says_yes(tmp_path):
+    """a defense-in-depth backstop alongside the prompt fix - LLM judgment
+    is stochastic, this catches the pattern deterministically even if a
+    future model slips back into the old behavior."""
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    gmail_store.upsert_message(
+        _message("m1", "t1", "Hotel Reservations <reservations@hotel.example.com>", "2024-06-12T00:00:00+00:00")
+    )
+    commitment_store = InboxIntelligenceStore(tmp_path / "commitments.db")
+    client = _FakeClient(
+        ["HAS_COMMITMENT: yes\nDESCRIPTION: The hotel will acknowledge emails within 2 hours during business hours.\nDEADLINE_PHRASE: within 2 hours"]
+    )
+
+    stats = scan_for_commitments(gmail_store, commitment_store, _ACCOUNT_EMAIL, client, "claude-haiku-4-5", _FakeAnalyzer())
+
+    assert stats.commitments_found == 0
+    assert commitment_store.list_open_commitments() == []
+    assert commitment_store.is_message_scanned("m1") is True
 
 
 def test_literal_none_deadline_phrase_is_stored_as_null_not_the_string_none(tmp_path):

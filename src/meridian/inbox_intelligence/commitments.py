@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from email.utils import parseaddr
 from pathlib import Path
@@ -15,6 +16,26 @@ from meridian.query.anthropic_client import call_claude
 from meridian.query.date_range import parse_stored_date
 from meridian.redaction.tokenize import tokenize_for_external_call, untokenize
 from meridian.security.audit_log import record_event
+
+# a deterministic backstop alongside the prompt-level fix, not a
+# replacement for it - LLM judgment is stochastic, this catches the
+# pattern reliably every time. Boilerplate policy/SLA text almost always
+# describes a *recurring turnaround window* ("within 2 hours," "during
+# business hours," "typically respond within 24 hours") rather than a
+# deadline tied to this specific exchange - a real commitment says "by
+# Friday" or "tomorrow," not "within our normal business hours."
+_BOILERPLATE_POLICY_RE = re.compile(
+    r"\b(business hours|operational hours|office hours|"
+    r"standard (response|policy|turnaround)|typical(ly)? respond|"
+    r"we aim to respond|responds? within|response time|"
+    r"(support|customer service) team (typically|usually|generally))\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_boilerplate_policy(description: str, deadline_phrase: str | None) -> bool:
+    combined = f"{description} {deadline_phrase or ''}"
+    return bool(_BOILERPLATE_POLICY_RE.search(combined))
 
 
 @dataclass(frozen=True)
@@ -124,6 +145,9 @@ def scan_for_commitments(
         deadline_phrase = fields.get("DEADLINE_PHRASE", "").strip()
         if deadline_phrase.upper() in ("", "NONE"):
             deadline_phrase = None
+
+        if _looks_like_boilerplate_policy(description, deadline_phrase):
+            continue
 
         _, sender_email = parseaddr(row["sender"] or "")
         is_from_me = sender_email.lower() == account_email_lower
