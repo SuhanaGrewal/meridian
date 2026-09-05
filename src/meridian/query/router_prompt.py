@@ -28,6 +28,11 @@ CLASSIFY_SYSTEM_PROMPT = (
     "need to call the accountant\", \"don't let me forget to renew the "
     "passport\"). Different from a question: the user is stating something "
     "they want tracked, not asking to be told something.\n"
+    "DRAFT_REPLY - asking for a reply to be drafted/written for a "
+    "specific email or thread (e.g. \"draft a reply to Alice's email\", "
+    "\"write a response to the budget thread\", \"help me reply to "
+    "Nick\"). Different from REMINDER: this produces a draft to review, "
+    "not a tracked task.\n"
     "GENERAL - anything else, including specific fact questions about "
     "email, calendar, document, or note content (e.g. \"when did I fly to "
     "London\", \"what did Jane say about the budget\")."
@@ -79,6 +84,14 @@ MATCH_RESOLVE_SYSTEM_PROMPT = (
     "from the list - never guess."
 )
 
+MATCH_DRAFT_TARGET_SYSTEM_PROMPT = (
+    "The user wants a reply drafted for one specific email thread. Given "
+    "their message and the numbered list of threads currently awaiting "
+    "their reply below, decide which ONE thread they mean. Respond with "
+    "ONLY the bracket number (e.g. \"2\"), or NONE if you cannot "
+    "confidently tell which thread they mean from the list - never guess."
+)
+
 
 def build_stale_threads_user_message(question: str, threads: list[Any]) -> str:
     lines = [f"User's question:\n{question}", "", "Threads:"]
@@ -94,6 +107,13 @@ def build_stale_threads_user_message(question: str, threads: list[Any]) -> str:
 
 def build_resolve_candidates_message(text: str, labels: list[str]) -> str:
     lines = [f"User's message:\n{text}", "", "Open items:"]
+    for index, label in enumerate(labels, start=1):
+        lines.append(f"[{index}] {label}")
+    return "\n".join(lines).strip()
+
+
+def build_draft_target_candidates_message(text: str, labels: list[str]) -> str:
+    lines = [f"User's message:\n{text}", "", "Threads awaiting your reply:"]
     for index, label in enumerate(labels, start=1):
         lines.append(f"[{index}] {label}")
     return "\n".join(lines).strip()

@@ -697,9 +697,9 @@ weekday names and relative-day phrases are; unresolvable phrases show no
 due date rather than a guessed one. `resolve-commitment` is manual only -
 there's no automatic fulfillment detection.
 
-Drafting replies in your voice is tracked in `BACKLOG.md`, not yet built.
 Merging context across threads about the same topic is built (see the
-topic graph under Phase 9 above); reminder intake is documented below.
+topic graph under Phase 9 above); reminder intake and reply drafting are
+documented below.
 
 **Reminder intake** - "remind me to meet with Nick" is recognized as a
 task to track, not a question to answer, and (if a calendar is available)
@@ -715,6 +715,23 @@ python -m meridian.reminders list
 python -m meridian.reminders dismiss <reminder_id>
 ```
 
+**Reply drafting** - drafts a reply to a specific message in your own
+voice (recent substantive sent-mail excerpts as style examples, not a
+trained profile) and adjusted by relationship to the sender (a
+deterministic count of past exchanges with that contact - new/occasional/
+frequent - not an LLM guess). **Drafting only**: there is no send path
+anywhere in this project - `approve` just marks a draft ready for a send
+step that doesn't exist yet, pending a new Google OAuth scope this
+project doesn't have and hasn't been given (see `BACKLOG.md` #11):
+
+```
+python -m meridian.replies draft <message_id>
+python -m meridian.replies list
+python -m meridian.replies show <draft_id>
+python -m meridian.replies edit <draft_id> "revised text"
+python -m meridian.replies approve <draft_id>   # or reject
+```
+
 ### Talking to it in plain language
 
 The commands above still exist, but you don't need to know them - `python
@@ -728,18 +745,20 @@ python -m meridian.query "mark the laptop drop-off commitment as done"
 python -m meridian.query "when did I fly to London"
 python -m meridian.query "summarize my recent emails"
 python -m meridian.query "remind me to meet with Nick"
+python -m meridian.query "draft a reply to Alice's email"
 ```
 
-One cheap Claude call classifies the message into one of six categories -
-stale threads, open commitments, "mark this resolved," a broad recent-
-activity summary, a reminder/task, or a genuine fact question - before
-routing. Stale threads and broad summaries come back as a natural
-summary in prose, not a raw email dump - either will only quote the
-actual message text if you explicitly ask to see it. A "mark as resolved"
-request is matched against your currently open threads, commitments, and
-reminders; if it's ambiguous (e.g. the same email produced both a stale
-thread and a tracked commitment), it asks you to be more specific rather
-than guessing. Once dismissed, a thread stays hidden from future
+One cheap Claude call classifies the message into one of seven categories
+- stale threads, open commitments, "mark this resolved," a broad recent-
+activity summary, a reminder/task, a reply to draft, or a genuine fact
+question - before routing. Stale threads and broad summaries come back as
+a natural summary in prose, not a raw email dump - either will only quote
+the actual message text if you explicitly ask to see it. A "draft a
+reply" request is matched against threads currently awaiting your reply,
+the same set a "mark as resolved" request matches against (along with
+commitments and reminders); if it's ambiguous, it asks you to be more
+specific rather than guessing wrong and drafting a reply to the wrong
+thread. Once dismissed, a thread stays hidden from future
 `stale-threads` results (`InboxIntelligenceStore` persists this - stale
 threads used to be recomputed fresh every time with no memory of what
 you'd already handled).

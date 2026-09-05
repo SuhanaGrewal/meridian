@@ -12,18 +12,23 @@ from meridian.query.anthropic_client import call_claude
 from meridian.query.date_range import extract_date_range
 from meridian.query.router_prompt import (
     CLASSIFY_SYSTEM_PROMPT,
+    MATCH_DRAFT_TARGET_SYSTEM_PROMPT,
     MATCH_RESOLVE_SYSTEM_PROMPT,
     SUMMARIZE_BROAD_ASK_SYSTEM_PROMPT,
     SUMMARIZE_STALE_THREADS_SYSTEM_PROMPT,
     build_broad_ask_user_message,
+    build_draft_target_candidates_message,
     build_resolve_candidates_message,
     build_stale_threads_user_message,
 )
 from meridian.redaction.tokenize import tokenize_for_external_call, untokenize
 from meridian.reminders.scheduling import propose_free_slot
+from meridian.replies.drafting import MessageNotFoundError, draft_reply_for_message
 from meridian.security.audit_log import record_event
 
-Intent = Literal["stale_threads", "commitments", "resolve", "broad_summary", "reminder", "general"]
+Intent = Literal[
+    "stale_threads", "commitments", "resolve", "broad_summary", "reminder", "draft_reply", "general"
+]
 
 # default backward-looking window for a broad ask with no recognized date
 # phrase of its own (e.g. "summarize my recent emails") - matches
@@ -89,6 +94,8 @@ def classify_intent(
         return "broad_summary"
     if "REMINDER" in normalized:
         return "reminder"
+    if "DRAFT_REPLY" in normalized:
+        return "draft_reply"
     return "general"
 
 
@@ -190,6 +197,68 @@ def _handle_reminder(
     )
 
 
+def _latest_message_id_for_thread(gmail_store: Any, thread_id: str) -> str | None:
+    for row in gmail_store.list_latest_message_per_thread():
+        if row["thread_id"] == thread_id:
+            return row["message_id"]
+    return None
+
+
+def _handle_draft_reply(
+    text: str,
+    threads: list[Any],
+    *,
+    gmail_store: Any,
+    account_email: str,
+    draft_store: Any,
+    client: Any,
+    model: str,
+    analyzer: Any,
+    logger: logging.Logger | None = None,
+    audit_log_dir: Path | None = None,
+) -> str:
+    """matches the request against threads currently awaiting a reply
+    (the only threads it makes sense to draft one for) via one LLM call,
+    then drafts via replies/drafting.py - the actual voice/relationship/
+    LLM-call logic lives there, this only handles picking which thread.
+    Drafting only - nothing is ever sent, see replies/store.py."""
+    if not threads:
+        return "There's nothing awaiting your reply right now to draft for."
+
+    labels = [f"From {thread.last_sender}, subject '{thread.subject}'" for thread in threads]
+    user_message = build_draft_target_candidates_message(text, labels)
+    response = _call_llm(
+        client=client, model=model, system=MATCH_DRAFT_TARGET_SYSTEM_PROMPT, text=user_message, analyzer=analyzer,
+        max_tokens=20, logger=logger, audit_log_dir=audit_log_dir, operation="query.router_draft_match",
+    )
+    normalized = response.strip().upper()
+    if "NONE" in normalized or not normalized.isdigit():
+        return "I'm not sure which thread you mean - could you be more specific?"
+
+    index = int(normalized) - 1
+    if not (0 <= index < len(threads)):
+        return "I'm not sure which thread you mean - could you be more specific?"
+
+    thread = threads[index]
+    message_id = _latest_message_id_for_thread(gmail_store, thread.thread_id)
+    if message_id is None:
+        return "I'm not sure which thread you mean - could you be more specific?"
+
+    try:
+        draft_id = draft_reply_for_message(
+            gmail_store, draft_store, account_email, message_id,
+            client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir,
+        )
+    except MessageNotFoundError:
+        return "I'm not sure which thread you mean - could you be more specific?"
+
+    draft = draft_store.get_draft(draft_id)
+    return (
+        f"Here's a draft reply to {thread.last_sender} (draft id: {draft_id}, nothing sent):\n\n"
+        f"{draft['draft_text']}"
+    )
+
+
 @dataclass(frozen=True)
 class _ResolvableItem:
     kind: Literal["thread", "commitment", "reminder"]
@@ -259,19 +328,21 @@ def route(
     notes_store: Any = None,
     entity_store: Any = None,
     reminder_store: Any = None,
+    draft_store: Any = None,
     now: datetime | None = None,
     logger: logging.Logger | None = None,
     audit_log_dir: Path | None = None,
 ) -> RouterResult:
     """classifies a free-text message into stale_threads / commitments /
-    resolve / broad_summary / reminder / general, and directly answers the
-    first five (general falls through to query.answer.ask(), handled by
-    the caller). This is the "everything is a text message" entry point -
-    a real frontend wouldn't expose separate CLI subcommands per
-    capability, it maps one text box to whichever backend actually
-    answers the question. calendar_store/docs_store/notes_store/
-    entity_store are only needed for broad_summary, reminder_store only
-    for reminder - if the caller doesn't have the stores an intent needs
+    resolve / broad_summary / reminder / draft_reply / general, and
+    directly answers the first six (general falls through to
+    query.answer.ask(), handled by the caller). This is the "everything
+    is a text message" entry point - a real frontend wouldn't expose
+    separate CLI subcommands per capability, it maps one text box to
+    whichever backend actually answers the question. calendar_store/
+    docs_store/notes_store/entity_store are only needed for
+    broad_summary, reminder_store only for reminder, draft_store only for
+    draft_reply - if the caller doesn't have the stores an intent needs
     wired up, that intent just falls through to general instead of
     erroring."""
     now = now if now is not None else datetime.now(tz=timezone.utc)
@@ -281,8 +352,10 @@ def route(
         intent = "general"
     if intent == "reminder" and reminder_store is None:
         intent = "general"
+    if intent == "draft_reply" and draft_store is None:
+        intent = "general"
 
-    if intent in ("stale_threads", "resolve") and account_email is None:
+    if intent in ("stale_threads", "resolve", "draft_reply") and account_email is None:
         return RouterResult(
             intent=intent,
             answer="Account email not captured yet - run `python -m meridian.ingestion.gmail` first.",
@@ -326,5 +399,16 @@ def route(
             client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir,
         )
         return RouterResult(intent="broad_summary", answer=answer)
+
+    if intent == "draft_reply":
+        threads = find_stale_threads(
+            gmail_store, account_email, now=now, max_days_quiet=_DEFAULT_MAX_DAYS_QUIET,
+            exclude_thread_ids=inbox_store.list_dismissed_thread_ids(),
+        )
+        answer = _handle_draft_reply(
+            text, threads, gmail_store=gmail_store, account_email=account_email, draft_store=draft_store,
+            client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir,
+        )
+        return RouterResult(intent="draft_reply", answer=answer)
 
     return RouterResult(intent="general", answer=None)

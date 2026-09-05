@@ -20,6 +20,7 @@ from meridian.query.reranker import build_reranker
 from meridian.query.router import route
 from meridian.redaction.analyzer import build_analyzer_engine
 from meridian.reminders.store import ReminderStore
+from meridian.replies.store import DraftStore
 
 _ABSTAIN_MESSAGES = {
     "no_candidates": "Nothing in the index looks related to that question.",
@@ -90,6 +91,7 @@ def main() -> None:
             notes_store=NotesStore(config.ingestion_dir / "local_files" / "local_files.db"),
             entity_store=EntityGraphStore(config.entity_graph_dir / "entity_graph.db"),
             reminder_store=ReminderStore(config.reminders_dir / "reminders.db"),
+            draft_store=DraftStore(config.replies_dir / "drafts.db"),
             logger=logger,
             audit_log_dir=config.log_dir,
         )

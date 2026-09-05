@@ -9,6 +9,7 @@ from meridian.ingestion.gmail.store import GmailStore
 from meridian.ingestion.local_files.store import NotesStore
 from meridian.query.router import classify_intent, route
 from meridian.reminders.store import ReminderStore
+from meridian.replies.store import DraftStore
 
 _ACCOUNT_EMAIL = "me@example.com"
 _NOW = datetime(2024, 6, 10, tzinfo=timezone.utc)
@@ -442,3 +443,96 @@ def test_route_resolve_dismisses_matched_reminder(tmp_path):
     assert reminder_store.get_reminder(reminder_id)["status"] == "dismissed"
     assert "Nick" in result.answer
     assert len(client.messages.calls) == 2  # classify + resolve-match
+
+
+def test_classify_intent_draft_reply():
+    client = _FakeClient(["DRAFT_REPLY"])
+
+    intent = classify_intent("draft a reply to Alice's email", client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer())
+
+    assert intent == "draft_reply"
+
+
+def test_route_draft_reply_without_draft_store_falls_through_to_general(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    client = _FakeClient(["DRAFT_REPLY"])
+
+    result = route(
+        "draft a reply to Alice's email", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+    )
+
+    assert result.intent == "general"
+    assert result.answer is None
+
+
+def test_route_draft_reply_with_no_stale_threads_skips_second_llm_call(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    draft_store = DraftStore(tmp_path / "drafts.db")
+    client = _FakeClient(["DRAFT_REPLY"])
+
+    result = route(
+        "draft a reply to Alice's email", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+        draft_store=draft_store,
+    )
+
+    assert result.intent == "draft_reply"
+    assert "nothing awaiting your reply" in result.answer.lower()
+    assert len(client.messages.calls) == 1
+
+
+def test_route_draft_reply_matches_thread_and_drafts(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    gmail_store.upsert_message(_message("m1", "t1", "Alice <alice@example.com>", "2024-06-05T00:00:00+00:00"))
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    draft_store = DraftStore(tmp_path / "drafts.db")
+    client = _FakeClient(["DRAFT_REPLY", "1", "Sure, that works for me!"])
+
+    result = route(
+        "draft a reply to Alice's email", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+        draft_store=draft_store,
+    )
+
+    assert result.intent == "draft_reply"
+    assert "Sure, that works for me!" in result.answer
+    assert "nothing sent" in result.answer.lower()
+    pending = draft_store.list_pending_drafts()
+    assert len(pending) == 1
+    assert pending[0]["draft_text"] == "Sure, that works for me!"
+
+
+def test_route_draft_reply_returns_clarifying_message_when_llm_is_unsure(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    gmail_store.upsert_message(_message("m1", "t1", "Alice <alice@example.com>", "2024-06-05T00:00:00+00:00"))
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    draft_store = DraftStore(tmp_path / "drafts.db")
+    client = _FakeClient(["DRAFT_REPLY", "NONE"])
+
+    result = route(
+        "draft a reply", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+        draft_store=draft_store,
+    )
+
+    assert "not sure" in result.answer.lower()
+    assert draft_store.list_pending_drafts() == []
+
+
+def test_route_draft_reply_without_account_email_returns_explanatory_message(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    draft_store = DraftStore(tmp_path / "drafts.db")
+    client = _FakeClient(["DRAFT_REPLY"])
+
+    result = route(
+        "draft a reply to Alice's email", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=None, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+        draft_store=draft_store,
+    )
+
+    assert "gmail" in result.answer.lower()
+    assert len(client.messages.calls) == 1

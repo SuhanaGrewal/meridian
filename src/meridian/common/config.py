@@ -59,6 +59,10 @@ class Config:
     def notifications_dir(self) -> Path:
         return self.data_dir / "notifications"
 
+    @property
+    def replies_dir(self) -> Path:
+        return self.data_dir / "replies"
+
 
 def load_config(*, load_env_file=True) -> Config:
     if load_env_file:
@@ -96,3 +100,4 @@ def ensure_dirs(config: Config) -> None:
     config.query_dir.mkdir(parents=True, exist_ok=True)
     config.reminders_dir.mkdir(parents=True, exist_ok=True)
     config.notifications_dir.mkdir(parents=True, exist_ok=True)
+    config.replies_dir.mkdir(parents=True, exist_ok=True)

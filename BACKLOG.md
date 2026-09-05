@@ -15,31 +15,20 @@ and fold the results into `GatheredItem`s (or a dedicated section), likely
 reusing the same "summarize, don't dump raw text" approach `query/router.py`
 already uses for the same data.
 
-### 11. Draft replies in the user's voice, adjusted by relationship, approvable/editable — NEEDS A DECISION FIRST
-Requested (as part of Inbox Intelligence): draft replies matching how the
-user actually writes, adjusted by relationship to the recipient (e.g.
-more formal for a manager, casual for a friend), each individually
-approvable/rejectable/editable.
-**Flagging before any implementation**: drafting text is straightforward
-(same mechanism as `query`'s answer generation), but two real design
-gaps exist before it'd be any good: (1) no "voice profile" exists - would
-need to build one from the user's own past sent messages, which first
-requires being able to tell sent vs. received mail apart (today's
-`messages` table has no "is this from me" concept - the same
-`account_email` captured for backlog #13 makes this newly possible); (2)
-no "relationship to this contact" concept exists - would need inferring
-from `entity_graph` (e.g. frequency/reciprocity of contact) or explicit
-tagging, not obvious which without discussion.
-**Separately, and more fundamentally**: *sending* an approved draft
-requires giving Meridian a brand-new Google OAuth scope (`gmail.send` or
-`gmail.compose`) on top of the 4 read-only scopes it has today. Every
-design principle in `CLAUDE.md` and the README so far is built around
-"read-only, nothing ever sends or executes on its own." This would be the
-first time that stops being true. Also needs per-item approval granularity
-in whatever review flow surfaces these (today's `digest review
---approve/--reject` decides a whole run, not individual items). Wants an
-explicit go-ahead before starting, not just folding into a larger feature
-bundle.
+### 11 (remaining half). Actually sending an approved draft — NEEDS EXPLICIT GO-AHEAD
+The drafting half is built (see Fixed, below) - what's left is a send
+path. Requires giving Meridian a brand-new Google OAuth scope
+(`gmail.send` or `gmail.compose`) on top of the 4 read-only scopes it has
+today. Every design principle in `CLAUDE.md` and the README so far is
+built around "read-only, nothing ever sends or executes on its own" -
+this would be the first time that stops being true. Deliberately not
+started without explicit go-ahead (given, but not yet acted on - waiting
+on the user to grant the new OAuth scope first). Also still needs
+per-item approval granularity wired into whatever review flow surfaces
+these (today's `digest review --approve/--reject` decides a whole run,
+not individual items) - `replies/store.py::DraftStore.approve()` today
+only flips a status flag, there's genuinely nothing downstream that acts
+on it yet.
 
 
 ## Fixed
@@ -276,6 +265,48 @@ directly, not just trusting the "0" output).
 
 Related to #5 (no consumer-facing interface) - would share infrastructure
 with a "digest is ready" notification if #5 is ever built.
+
+### 11 (drafting half). Draft replies in the user's voice, adjusted by relationship
+Requested (as part of Inbox Intelligence): draft replies matching how the
+user actually writes, adjusted by relationship to the recipient,
+approvable/rejectable/editable. Built the drafting half only, by explicit
+request - the sending half stays a separate, not-yet-authorized piece of
+work (see Next up, above).
+
+New `replies/` module:
+- `replies/voice.py::sample_voice_examples()` - not a trained "voice
+  model," just the user's own most recent substantive sent messages
+  (skipping trivial one-liners like "Thanks!") handed to the LLM as
+  few-shot style examples. Telling sent vs. received mail apart uses the
+  `account_email` already captured for #13/#3.
+- `replies/relationship.py::classify_relationship()` - a deterministic
+  count of past messages exchanged with the contact (either direction),
+  bucketed into new/occasional/frequent. Deliberately not an LLM
+  judgment - same "prefer reliable code over LLM guessing" approach this
+  project already applies to dates and deadlines. The message currently
+  being replied to is excluded from its own count, or a genuine
+  first-time contact could never register as "new."
+- `replies/drafting.py::draft_reply_for_message()` - combines both
+  signals into one Claude call, redacted per the usual pattern, and
+  stores the result via `replies/store.py::DraftStore`.
+- Router got a 7th intent, DRAFT_REPLY, matching a request like "draft a
+  reply to Alice's email" against threads currently awaiting a reply
+  (`find_stale_threads()` - the same set #17's RESOLVE already matches
+  against), reusing the same "match request to one candidate via an LLM
+  call, ask for clarification rather than guess wrong" approach.
+- Own CLI (`python -m meridian.replies draft/list/show/edit/approve/reject`)
+  as a direct escape hatch, same pattern as reminders/inbox_intelligence.
+
+`DraftStore.approve()` only flips a status flag - there is no send path
+anywhere in this codebase for it to trigger, by design (see Next up,
+above). Verified against real data: drafted a reply to a real stale
+thread (a shipping company's booking confirmation) that correctly
+referenced specific real details from the original email (a £10 missed-
+collection charge, label/documentation requirements) rather than
+generic filler; a second draft, generated through the full router path
+against a different real thread, correctly matched the thread by name
+and produced a reply signed with the user's own real name - picked up
+from the voice examples, not invented.
 
 ### 17. Natural-language router: "everything is a text message"
 Requested: instead of separate CLI subcommands per capability, a single
