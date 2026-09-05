@@ -3,19 +3,19 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.meridian.gmailsync</string>
+    <string>com.meridian.autosync</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>{{PROJECT_DIR}}/scripts/sync_gmail.sh</string>
+        <string>{{PROJECT_DIR}}/scripts/sync_all.sh</string>
     </array>
     <key>StartInterval</key>
     <integer>600</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{{PROJECT_DIR}}/logs/launchd-gmailsync.log</string>
+    <string>{{PROJECT_DIR}}/logs/launchd-autosync.log</string>
     <key>StandardErrorPath</key>
-    <string>{{PROJECT_DIR}}/logs/launchd-gmailsync.log</string>
+    <string>{{PROJECT_DIR}}/logs/launchd-autosync.log</string>
 </dict>
 </plist>

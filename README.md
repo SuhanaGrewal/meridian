@@ -565,7 +565,7 @@ LLM_API_KEY=<key> MERIDIAN_RUN_LIVE_LLM_TESTS=1 pytest tests/eval/test_answer_ev
 
 Every command in this project is a one-shot CLI with no built-in scheduler
 (see `CLAUDE.md`'s "production-rigor" principle — this is deliberate, not
-an oversight). To actually get Gmail syncing automatically and a digest
+an oversight). To actually get every source syncing automatically and a digest
 generated nightly, `scripts/install_launchd.sh` installs two macOS
 `launchd` agents:
 
@@ -573,8 +573,10 @@ generated nightly, `scripts/install_launchd.sh` installs two macOS
 ./scripts/install_launchd.sh
 ```
 
-- **Gmail sync every 10 minutes** — runs `python -m meridian.ingestion.gmail`
-  then reindexes just the gmail source, so newly-synced mail is actually
+- **Full sync every 10 minutes** — runs Gmail, Calendar, Docs, and
+  local-files ingestion (local-files skips itself gracefully if
+  `MERIDIAN_NOTES_FOLDER` isn't set, rather than erroring the whole job),
+  then reindexes everything incrementally, so anything new is actually
   queryable within minutes, not just downloaded.
 - **Nightly digest** — fires once daily at 8am by default
   (`DIGEST_HOUR=7 ./scripts/install_launchd.sh` to change it). To restrict
@@ -585,19 +587,16 @@ generated nightly, `scripts/install_launchd.sh` installs two macOS
 
 Safe to re-run `install_launchd.sh` any time (e.g. after changing
 `DIGEST_HOUR`) — it reloads cleanly instead of erroring on an
-already-installed job. Logs land in `logs/launchd-gmailsync.log` and
-`logs/launchd-digest.log`, separate from Meridian's own structured log.
+already-installed job, and cleans up the older Gmail-only job name if
+you'd installed that before every source was covered. Logs land in
+`logs/launchd-autosync.log` and `logs/launchd-digest.log`, separate from
+Meridian's own structured log.
 
 Remove both jobs with:
 
 ```
 ./scripts/uninstall_launchd.sh
 ```
-
-Only Gmail sync and the digest are scheduled today — Calendar, Docs, and
-local-files ingestion still need to be run by hand (`python -m
-meridian.ingestion.calendar`, etc.), or added to `scripts/sync_gmail.sh`'s
-job if you want them on the same 10-minute cadence.
 
 ## Inbox Intelligence
 
