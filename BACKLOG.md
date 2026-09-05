@@ -27,45 +27,80 @@ What it'd take:
 - Calendar is the straightforward case: `start_at` is a real forward-dated
   field, so "upcoming calendar events" is a clean, achievable filter today.
 
+### 3. No scheduler — nothing runs automatically
+Every command (ingestion, indexing, digest) is one-shot, run-by-hand only.
+Requested concretely: Gmail auto-sync every 10 minutes, and a nightly
+automatic digest. Both need an external `launchd` (macOS) job wrapping the
+existing CLI commands — doesn't exist yet, but is mechanical (no new
+application logic, just OS-level scheduling of commands that already work).
+- Sub-item: "user chooses which days the digest runs" — there's no
+  login/account concept in this local single-user tool, so "when the user
+  logs in" doesn't map to anything today. Realistic version: a config
+  setting (e.g. `DIGEST_DAYS=mon,wed,fri` in `.env`), not a login screen.
+
+### 9. Follow-up tracking: surface unresolved past questions in the digest
+Nothing today remembers past questions at all — `query` is one-shot and
+stateless, no history is persisted anywhere. Requested: if the user asked
+something like "did I get a reply about X" and it's still unresolved, the
+next digest should call that out with emphasis.
+What it'd take:
+- A query-history store (new - doesn't exist in any form today).
+- A way to classify which past questions represent "waiting on something"
+  vs. a plain fact lookup - not obvious how to do reliably without either
+  an explicit "remind me about this" flag from the user, or an LLM
+  judgment call on every question asked (cost/complexity tradeoff to
+  discuss).
+- A way to check new incoming data against an open question to decide if
+  it's now resolved.
+- Wiring the result into `digest/gather.py` so it can be woven into the
+  next digest with the "call this out" emphasis the digest prompt already
+  supports for anomalies.
+
+### 10. Reminder/task intake + proactive scheduling suggestions
+Requested: "remind me to meet with Nick" should be recognized as a task
+(not a question), and a future digest (or immediate response) should
+propose a specific free time slot from the calendar for approval.
+What it'd take:
+- A new intake path distinct from `query` (which only answers questions)
+  and `digest` (which only summarizes) - recognizing an imperative
+  statement as a task to track, not something to search-and-answer.
+- A persisted reminders/tasks store (new).
+- Free/busy computation against the already-ingested calendar data
+  (straightforward - the data's there) to find open slots.
+- A proposal-and-approval step consistent with the project's "nothing acts
+  autonomously" principle - suggest, don't book.
+
+### 11. Digest includes drafted emails, approvable/rejectable/editable per item — NEEDS A DECISION FIRST
+Requested: the digest should come with drafted email replies, each
+individually approvable, rejectable, or editable.
+**Flagging before any implementation**: drafting is straightforward
+(Claude can write a reply given context, same mechanism as answer
+generation). But *sending* an approved draft requires giving Meridian a
+brand-new Google OAuth scope (`gmail.send` or `gmail.compose`) on top of
+the 4 read-only scopes (`gmail.readonly`, `calendar.readonly`,
+`documents.readonly`, `drive.readonly`) it has today. Every design
+principle in `CLAUDE.md` and the README so far is built around "read-only,
+nothing ever sends or executes on its own" - "approval means accepting the
+digest itself, not authorizing an outbound action" is stated explicitly in
+the Phase 10 README section. This would be the first time that stops being
+true. Also needs per-item approval granularity in the digest review flow
+(today's `digest review --approve/--reject` decides the whole run, not
+individual items). Wants an explicit go-ahead before starting, not just
+folding into a larger feature bundle.
+
+### 12. Calendar notifications
+Requested: proactive alerts (e.g. "meeting in 15 minutes"), not just
+seeing upcoming events in a digest. Different from a periodic sync/digest
+job - needs something checking the calendar close to real-time and firing
+a native OS notification, which means either a genuinely long-running
+background process or a very frequent scheduled check (e.g. every minute)
+- worth scoping the tradeoff before picking an approach. Related to #5
+(no consumer-facing interface) - likely shares infrastructure with a
+"digest is ready" notification if #5 is ever built.
+
 ## Fixed
 
-### 7. Digest crashes on first run after any full backfill (prompt too long) — FIXED
-`digest/gather.py` asks each source's store for "what's new since `since`."
-`gmail/store.py::list_messages_since` and `local_files/store.py`'s
-equivalent both filter on `updated_at` (when the row was last written to
-the *local* database) instead of the content's real-world date
-(`sent_at` for Gmail, `mtime_ns` for local files). Right after any full
-backfill, every row's `updated_at` is "just now," so the very first digest
-run sweeps in the *entire* mailbox — not just genuinely recent messages —
-and blows past Claude's context limit (`prompt is too long: 206771 tokens
-> 200000 maximum`, hit on a real 1,198-message mailbox). `docs/store.py`
-does NOT have this bug — it already correctly filters on `modified_time`,
-the doc's real Google-side edit date.
-- Fix: change `list_messages_since` (gmail) and its local_files equivalent
-  to filter on the real content timestamp (`sent_at`, `mtime_ns`) instead
-  of `updated_at`, matching what `docs/store.py` already does correctly.
-- No workaround via CLI flags — `--lookback-hours` doesn't help, since the
-  bug is in the WHERE clause itself, not the window calculation.
-
-### 2. Network timeouts crash the whole sync instead of retrying — FIXED
-`common/google_api.py`'s `execute_with_retry` only retries `RateLimitedError`
-and `TransientHttpError` — a raw connection-level timeout (no HTTP response
-at all) isn't either of those, so it isn't retried and crashes the entire
-ingestion run. Found via: a real Gmail full-backfill died on a single
-message's `TimeoutError` mid-sync. Data already fetched wasn't lost
-(committed per-message), but the whole run had to restart from scratch
-since `_full_backfill` only saves its resume point at the very end, not
-incrementally.
-- Fix: broaden the retryable exception set in `retry_with_backoff` to
-  include connection-level errors (`TimeoutError`, `ConnectionError`, etc.),
-  not just Google API error responses.
-- Related, smaller: consider checkpointing `_full_backfill`'s progress
-  page-by-page instead of only at the end, so a crash partway through a
-  large mailbox doesn't force a full restart.
-
-## Fixed
-
-### 8. Digest read like a curated newsletter, not a quick status update — FIXED
+### 8. Digest read like a curated newsletter, not a quick status update
 `digest/prompt.py`'s system prompt said "group related items together...
 keep skimmable in under a minute" - pushed Claude toward thematic
 categories with markdown headers, bold titles, and emoji section icons
@@ -76,12 +111,30 @@ sources instead of silent omission, routine noise (newsletters) condensed
 to a count instead of listed item-by-item, and anomalies (unusual charges,
 security alerts, stalled threads) called out directly.
 
-## Also found, not yet actioned
+### 7. Digest crashes on first run after any full backfill (prompt too long)
+`digest/gather.py` asks each source's store for "what's new since `since`."
+`gmail/store.py::list_messages_since` and `local_files/store.py`'s
+equivalent both filtered on `updated_at` (when the row was last written to
+the *local* database) instead of the content's real-world date
+(`sent_at` for Gmail, `mtime_ns` for local files). Right after any full
+backfill, every row's `updated_at` is "just now," so the very first digest
+run swept in the *entire* mailbox — not just genuinely recent messages —
+and blew past Claude's context limit (`prompt is too long: 206771 tokens
+> 200000 maximum`, hit on a real 1,198-message mailbox). `docs/store.py`
+did NOT have this bug — it already correctly filters on `modified_time`,
+the doc's real Google-side edit date. Fixed by filtering on the real
+content timestamp instead of `updated_at`, matching what `docs/store.py`
+already did correctly.
 
-### 3. No scheduler — nothing runs automatically
-Every command (ingestion, indexing, digest) is one-shot, run-by-hand only.
-"Sync every 5 minutes" and "nightly digest" both require an external
-`launchd` (macOS) job wrapping these commands — doesn't exist yet.
+### 2. Network timeouts crash the whole sync instead of retrying
+`common/google_api.py`'s `execute_with_retry` only retried `RateLimitedError`
+and `TransientHttpError` — a raw connection-level timeout (no HTTP response
+at all) isn't either of those, so it wasn't retried and crashed the entire
+ingestion run. Found via a real Gmail full-backfill that died on a single
+message's `TimeoutError` mid-sync. Fixed by catching `TimeoutError`/
+`ConnectionError` and retrying them the same way as a 5xx.
+
+## Also found, not yet actioned
 
 ### 4. `query` can't handle broad/open-ended asks
 Questions like "summarize my recent emails" or "what is my CV like"
