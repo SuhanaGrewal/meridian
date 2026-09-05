@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from meridian.digest.gather import gather_items
+from meridian.digest.gather import gather_items, open_question_item
 from meridian.ingestion.calendar.event_parser import ParsedEvent
 from meridian.ingestion.calendar.store import CalendarStore
 from meridian.ingestion.docs.doc_parser import ParsedDoc
@@ -203,3 +203,11 @@ def test_gather_items_entity_label_includes_mention_count(tmp_path):
     entity_items = [item for item in items if item["source"] == "entity"]
     assert "Acme Corp" in entity_items[0]["label"]
     assert "2 time(s)" in entity_items[0]["label"]
+
+
+def test_open_question_item_labels_source_and_includes_question_text():
+    item = open_question_item({"question_text": "did I get a reply from Nick", "asked_at": "2024-06-01T00:00:00+00:00"})
+
+    assert item["source"] == "query_history"
+    assert "did I get a reply from Nick" in item["label"]
+    assert "2024-06-01T00:00:00+00:00" in item["label"]

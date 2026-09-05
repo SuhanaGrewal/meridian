@@ -4,6 +4,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from meridian.digest.graph import build_digest_graph
+from meridian.query.history_store import QueryHistoryStore
 
 _INITIAL_STATE = {
     "window_start": "2024-06-01T00:00:00Z",
@@ -199,4 +200,90 @@ def test_resume_with_false_routes_to_rejected(tmp_path):
     final = graph.invoke(Command(resume=False), config=config)
 
     assert final["decision"] is False
+    conn.close()
+
+
+class _FakeMultiReplyMessages:
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeResponse(self._replies.pop(0))
+
+
+class _FakeMultiReplyClient:
+    def __init__(self, replies):
+        self.messages = _FakeMultiReplyMessages(replies)
+
+
+class _FakeAskResult:
+    def __init__(self, abstained, answer):
+        self.abstained = abstained
+        self.answer = answer
+
+
+def test_gather_includes_still_open_follow_up_question(tmp_path):
+    stores = _FakeStores()
+    history_store = QueryHistoryStore(tmp_path / "history.db")
+    history_store.add_question("did I get a reply from Nick", is_waiting=True, asked_at="2024-06-01T00:00:00Z")
+    client = _FakeMultiReplyClient(["PENDING", "Digest summary [1]."])
+
+    def ask_fn(question_text):
+        return _FakeAskResult(abstained=False, answer="No new messages found.")
+
+    conn = sqlite3.connect(tmp_path / "checkpoints.db", check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
+    graph = build_digest_graph(
+        stores, stores, stores, stores, stores, _FakeAnalyzer(), client, "claude-haiku-4-5", checkpointer,
+        history_store=history_store, ask_fn=ask_fn,
+    )
+
+    result = graph.invoke(_INITIAL_STATE, config={"configurable": {"thread_id": "run-followup"}})
+
+    assert "__interrupt__" in result
+    followup_items = [item for item in result["items"] if item["source"] == "query_history"]
+    assert len(followup_items) == 1
+    assert "did I get a reply from Nick" in followup_items[0]["label"]
+    assert len(history_store.list_open_waiting_questions()) == 1
+    conn.close()
+
+
+def test_gather_marks_resolved_question_resolved_and_excludes_it(tmp_path):
+    # no gmail/calendar/etc. data and the one open question resolves, so
+    # items ends up empty and the run correctly short-circuits to
+    # nothing_new - proving the resolved question doesn't linger as a
+    # gathered item, not just that it's absent from a populated list.
+    stores = _FakeStores()
+    history_store = QueryHistoryStore(tmp_path / "history.db")
+    history_store.add_question("did I get a reply from Nick", is_waiting=True, asked_at="2024-06-01T00:00:00Z")
+    client = _FakeMultiReplyClient(["RESOLVED"])
+
+    def ask_fn(question_text):
+        return _FakeAskResult(abstained=False, answer="Nick replied yesterday confirming the meeting.")
+
+    conn = sqlite3.connect(tmp_path / "checkpoints.db", check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
+    graph = build_digest_graph(
+        stores, stores, stores, stores, stores, _FakeAnalyzer(), client, "claude-haiku-4-5", checkpointer,
+        history_store=history_store, ask_fn=ask_fn,
+    )
+
+    result = graph.invoke(_INITIAL_STATE, config={"configurable": {"thread_id": "run-followup-resolved"}})
+
+    assert "__interrupt__" not in result
+    assert result["items"] == []
+    assert history_store.list_open_waiting_questions() == []
+    conn.close()
+
+
+def test_gather_without_history_store_makes_no_extra_llm_calls(tmp_path):
+    stores = _FakeStores(gmail=[_gmail_row()])
+    client = _FakeClient("Digest summary [1].")
+    graph, conn = _build_graph(tmp_path, stores=stores, client=client)
+
+    graph.invoke(_INITIAL_STATE, config={"configurable": {"thread_id": "run-no-history"}})
+
+    assert client.messages.call_count == 1
     conn.close()

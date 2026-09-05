@@ -60,23 +60,6 @@ system-level change, left for the user to trigger deliberately.
   ingestion. Could be added to the same 10-minute job or their own
   cadence if wanted.
 
-### 9. Follow-up tracking: surface unresolved past questions in the digest
-Nothing today remembers past questions at all — `query` is one-shot and
-stateless, no history is persisted anywhere. Requested: if the user asked
-something like "did I get a reply about X" and it's still unresolved, the
-next digest should call that out with emphasis.
-What it'd take:
-- A query-history store (new - doesn't exist in any form today).
-- A way to classify which past questions represent "waiting on something"
-  vs. a plain fact lookup - not obvious how to do reliably without either
-  an explicit "remind me about this" flag from the user, or an LLM
-  judgment call on every question asked (cost/complexity tradeoff to
-  discuss).
-- A way to check new incoming data against an open question to decide if
-  it's now resolved.
-- Wiring the result into `digest/gather.py` so it can be woven into the
-  next digest with the "call this out" emphasis the digest prompt already
-  supports for anomalies.
 
 ### 10. Reminder/task intake + proactive scheduling suggestions
 Requested: "remind me to meet with Nick" should be recognized as a task
@@ -197,6 +180,45 @@ Costs a real LLM call per not-yet-linked item, so - unlike the rest of
 data: a local note about an upcoming Lisbon trip was correctly labeled
 "Lisbon October trip planning" and linked; a re-run correctly skipped it
 as unchanged with no further LLM call.
+
+### 9. Follow-up tracking: surface unresolved past questions in the digest
+Requested: if the user asked something like "did I get a reply about X"
+and it's still unresolved, the next digest should call that out with
+emphasis. Nothing remembered past questions at all before this - `query`
+was one-shot and stateless.
+
+Built `query/history_store.py::QueryHistoryStore` (new `data/query/
+query_history.db`) recording every question asked through `query`'s CLI.
+The "waiting on something vs. plain fact lookup" classification (open
+question from the original scoping) is one small Claude call per question
+(`query/history.py::record_question`) - reliable enough, and far cheaper
+than building a separate explicit-flag UX for a one-shot CLI. Checking
+whether an open question is now resolved (`check_open_questions`) reuses
+`query.answer.ask()` wholesale rather than inventing new retrieval logic:
+re-ask the question against the current index, and if a confident (non-
+abstained) answer comes back, one more small Claude call judges whether
+it actually indicates the awaited thing happened (RESOLVED) or the answer
+doesn't really settle it (PENDING) - an abstain or a PENDING verdict both
+leave the question open.
+
+Wired into `digest/graph.py`'s `gather()` node (optional `history_store`/
+`ask_fn` params, both `None` by default so existing digest callers/tests
+are untouched): a still-open question becomes a `GatheredItem` sourced
+`query_history`, and `digest/prompt.py`'s system prompt now explicitly
+requires any such item to always be mentioned, never folded into a
+routine-noise count. `digest/__main__.py`'s `run` command builds the
+index/embedder/reranker this needs and binds them into `ask_fn` via
+`functools.partial` - the same pipeline a direct query would use, not a
+parallel implementation. A resolved question is marked resolved silently
+(a digest reports what's pending, not closure confirmations) and dropped
+from the gathered items entirely.
+
+Verified against real data end to end: asked "did I get a reply about
+the Lisbon trip" (correctly classified as waiting, no confident answer
+existed yet), then ran a real digest - it re-checked the question, still
+found nothing, and opened with "You're still waiting on a reply about the
+Lisbon trip that you asked about just now, and we don't have a confident
+answer for you yet [1]," citing the follow-up item by source.
 
 ### 17. Natural-language router: "everything is a text message"
 Requested: instead of separate CLI subcommands per capability, a single

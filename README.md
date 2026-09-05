@@ -295,6 +295,16 @@ Other flags: `--source gmail` to search one source only, `--top-k 3` to
 change how many chunks are retrieved, `--model claude-sonnet-5` to
 override the model for one run.
 
+**Follow-up tracking**: when an `LLM_API_KEY` is set, every question asked
+here is recorded to `data/query/query_history.db`
+(`query/history_store.py`) and classified (one small Claude call) as
+either a plain fact lookup or a "waiting on something" question (e.g.
+"did I get a reply about X"). Only the latter kind matters going
+forward — the next `digest run` re-checks every still-open one against
+the current index and, if it's still not resolved, opens the digest by
+calling it out explicitly rather than letting it quietly age out. See
+Phase 10 below.
+
 Known limitation: date-range phrases are computed in UTC calendar days,
 not your local wall-clock day — fine for a personal tool, but "today"
 could be off by a few hours right around midnight depending on your
@@ -398,6 +408,15 @@ final**, per this project's "nothing acts autonomously" principle. Since
 every Google API scope here is read-only, there's nothing to "send" —
 approval means accepting the digest itself, not authorizing an outbound
 action.
+
+If `LLM_API_KEY` is set, `run` also re-checks every still-open "waiting
+on something" question from Phase 8's query history (see above) against
+the current index — one real `query.answer.ask()` call per open
+question, the same pipeline a direct question would use. A question that
+now has a confident, resolving answer is marked resolved and dropped
+silently; anything still open is folded into the digest as its own item
+and the digest prompt is instructed to always call it out explicitly,
+never bury it in a routine-noise count.
 
 This is the first phase built on **LangGraph** (a genuinely lightweight
 addition — ~4MB across ~13 small packages, no LLM provider wrapper

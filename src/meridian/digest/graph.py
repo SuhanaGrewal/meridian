@@ -8,7 +8,7 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from meridian.digest.gather import gather_items
+from meridian.digest.gather import gather_items, open_question_item
 from meridian.digest.prompt import (
     SYSTEM_PROMPT,
     build_digest_message,
@@ -17,6 +17,7 @@ from meridian.digest.prompt import (
 )
 from meridian.digest.state import DigestState
 from meridian.query.anthropic_client import call_claude
+from meridian.query.history import check_open_questions
 from meridian.redaction.tokenize import tokenize_for_external_call, untokenize
 from meridian.security.audit_log import record_event
 
@@ -32,6 +33,8 @@ def build_digest_graph(
     model: str,
     checkpointer: Any,
     *,
+    history_store: Any = None,
+    ask_fn: Any = None,
     now: datetime | None = None,
     logger: logging.Logger | None = None,
     audit_log_dir: Path | None = None,
@@ -40,7 +43,16 @@ def build_digest_graph(
     -> review -> (approved | rejected)). real dependencies are closed over
     here rather than threaded through state, since LangGraph nodes are
     plain (state) -> dict functions with no constructor args of their own -
-    the same injection pattern as build_embedder()/build_reranker()."""
+    the same injection pattern as build_embedder()/build_reranker().
+
+    history_store/ask_fn are optional (#9, follow-up tracking): when both
+    are given, gather() also re-checks every open "waiting on something"
+    question via ask_fn (query.answer.ask bound to the live index/embedder/
+    reranker) and folds any still-unresolved one into the gathered items.
+    Costs a real LLM call per open question, on top of the one existing
+    paid call in summarize() - safe to add here specifically because
+    gather() only ever executes once per run_id (a resumed/reviewed run
+    re-enters at the review node's interrupt, never restarts from gather)."""
 
     def gather(state: DigestState) -> dict:
         window_end = state.get("window_end") or (now or datetime.now(timezone.utc)).isoformat()
@@ -55,6 +67,12 @@ def build_digest_graph(
             lookahead_end=state["lookahead_end"],
             logger=logger,
         )
+        if history_store is not None and ask_fn is not None and client is not None:
+            open_questions = check_open_questions(
+                history_store, ask_fn=ask_fn, client=client, model=model, analyzer=analyzer,
+                logger=logger, audit_log_dir=audit_log_dir,
+            )
+            items = [open_question_item(q) for q in open_questions] + items
         return {"items": items, "window_end": window_end}
 
     def route_after_gather(state: DigestState) -> str:

@@ -23,7 +23,11 @@ SYSTEM_PROMPT = (
     "If anything among the items looks like it deserves more attention "
     "than just being \"new\" - an unusual charge, a security alert, a "
     "conversation that's been waiting on a reply - call it out plainly and "
-    "say why in one sentence, rather than burying it in a list. After each "
+    "say why in one sentence, rather than burying it in a list. Any item "
+    "labeled as a follow-up the user is still waiting on must always be "
+    "mentioned explicitly, never folded into a routine-noise count - it "
+    "represents something they already asked about and are owed an update "
+    "on. After each "
     "claim, cite the bracket number(s) of the item(s) it came from, like "
     "[1] or [1][2]. If the provided items don't contain enough information "
     "about something, say so plainly instead of guessing.\n\n"
@@ -71,7 +75,7 @@ def build_plaintext_digest(items: list[GatheredItem]) -> str:
         by_source.setdefault(item["source"], []).append(item)
 
     lines = []
-    for source in ("gmail", "calendar", "docs", "local_files", "entity"):
+    for source in ("query_history", "gmail", "calendar", "docs", "local_files", "entity"):
         source_items = by_source.get(source)
         if not source_items:
             continue

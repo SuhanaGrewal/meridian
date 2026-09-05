@@ -14,6 +14,8 @@ from meridian.ingestion.gmail.store import GmailStore
 from meridian.ingestion.local_files.store import NotesStore
 from meridian.query.anthropic_client import build_client
 from meridian.query.answer import ask
+from meridian.query.history import record_question
+from meridian.query.history_store import QueryHistoryStore
 from meridian.query.reranker import build_reranker
 from meridian.query.router import route
 from meridian.redaction.analyzer import build_analyzer_engine
@@ -55,6 +57,18 @@ def main() -> None:
     client = build_client(config.llm_api_key) if config.llm_api_key else None
     if client is None:
         print("LLM_API_KEY is not set - showing retrieved context only, no answer will be generated.\n")
+
+    if client is not None:
+        # recorded regardless of which intent ends up answering it - only
+        # a "waiting on something" question (classified here) is ever
+        # checked for resolution and surfaced as an open follow-up (#9,
+        # see query/history.py and digest/gather.py).
+        history_store = QueryHistoryStore(config.query_dir / "query_history.db")
+        record_question(
+            args.question, history_store,
+            client=client, model=args.model or config.llm_model, analyzer=analyzer,
+            logger=logger, audit_log_dir=config.log_dir,
+        )
 
     if client is not None:
         # routing (stale threads / commitments / resolve / general) needs a

@@ -43,6 +43,8 @@ def run_digest_job(
     client: Any,
     model: str,
     checkpointer: Any,
+    history_store: Any = None,
+    ask_fn: Any = None,
     lookback: timedelta = timedelta(hours=24),
     lookahead: timedelta = timedelta(days=3),
     now: datetime | None = None,
@@ -66,7 +68,8 @@ def run_digest_job(
     run_id = str(uuid4())
     graph = build_digest_graph(
         gmail_store, calendar_store, docs_store, notes_store, entity_store,
-        analyzer, client, model, checkpointer, now=now, logger=logger, audit_log_dir=audit_log_dir,
+        analyzer, client, model, checkpointer,
+        history_store=history_store, ask_fn=ask_fn, now=now, logger=logger, audit_log_dir=audit_log_dir,
     )
     config = {"configurable": {"thread_id": run_id}}
     result = graph.invoke(

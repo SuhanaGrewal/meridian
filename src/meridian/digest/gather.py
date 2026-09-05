@@ -83,6 +83,23 @@ def _excluded_gmail_summary_item(excluded_count: int) -> GatheredItem:
     }
 
 
+def open_question_item(open_question: dict) -> GatheredItem:
+    """a still-unresolved "waiting on something" question the user asked
+    previously (see query/history.py::check_open_questions) - distinct
+    from every other item here, which describes new/changed source
+    content. Labeled explicitly as a follow-up so the digest prompt's
+    existing "call it out plainly" instruction has something unambiguous
+    to grab onto, rather than this blending into routine noise."""
+    return {
+        "source": "query_history",
+        "label": (
+            f"Follow-up you're still waiting on (asked {open_question['asked_at']}): "
+            f"\"{open_question['question_text']}\""
+        ),
+        "detail": "Still no confident answer found for this as of this digest.",
+    }
+
+
 def gather_items(
     gmail_store: Any,
     calendar_store: Any,
