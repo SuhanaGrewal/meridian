@@ -8,11 +8,11 @@ _NOW = datetime(2024, 6, 10, tzinfo=timezone.utc)
 _ACCOUNT_EMAIL = "me@example.com"
 
 
-def _message(message_id, thread_id, sender, sent_at, body_text="hello", label_ids=None) -> ParsedMessage:
+def _message(message_id, thread_id, sender, sent_at, body_text="hello", label_ids=None, subject=None) -> ParsedMessage:
     return ParsedMessage(
         message_id=message_id,
         thread_id=thread_id,
-        subject=f"Subject {thread_id}",
+        subject=subject if subject is not None else f"Subject {thread_id}",
         sender=sender,
         recipients=["someone@example.com"],
         sent_at=sent_at,
@@ -93,6 +93,54 @@ def test_personal_category_is_not_excluded(tmp_path):
             label_ids=["INBOX", "CATEGORY_PERSONAL"],
         )
     )
+
+    threads = find_stale_threads(store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3)
+
+    assert len(threads) == 1
+
+
+def test_auto_reply_subject_is_excluded(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(
+        _message(
+            "m1", "t1", "Advance Processing <advanceprocessing@state.gov>", "2024-06-01T00:00:00+00:00",
+            subject="Auto Reply",
+        )
+    )
+
+    threads = find_stale_threads(store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3)
+
+    assert threads == []
+
+
+def test_out_of_office_subject_is_excluded(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(
+        _message(
+            "m1", "t1", "Alice <alice@example.com>", "2024-06-01T00:00:00+00:00",
+            subject="Out of Office: back Monday",
+        )
+    )
+
+    threads = find_stale_threads(store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3)
+
+    assert threads == []
+
+
+def test_noreply_sender_is_excluded_even_with_a_normal_subject(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(
+        _message("m1", "t1", "Some Service <no-reply@service.example.com>", "2024-06-01T00:00:00+00:00")
+    )
+
+    threads = find_stale_threads(store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3)
+
+    assert threads == []
+
+
+def test_normal_subject_and_sender_are_not_excluded(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(_message("m1", "t1", "Alice <alice@example.com>", "2024-06-01T00:00:00+00:00"))
 
     threads = find_stale_threads(store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3)
 

@@ -161,7 +161,9 @@ def test_ask_generates_answer_and_untokenizes_placeholders_back(tmp_path):
     assert result.abstained is False
     assert result.llm_configured is True
     assert result.answer == "According to the context, Jane Doe presented the report [1]."
-    assert result.sources == "Sources:\n[1] Gmail email from a@example.com, sent 2024-06-12T00:00:00Z, subject: 'Budget'"
+    assert result.sources == (
+        "Sources:\n[1] Gmail email from a@example.com, sent 2024-06-12T00:00:00Z (today), subject: 'Budget'"
+    )
     # the tokenized placeholder, never the real name, must be what actually left the machine
     sent_user_message = client.messages.calls[0]["messages"][0]["content"]
     assert "Jane Doe" not in sent_user_message

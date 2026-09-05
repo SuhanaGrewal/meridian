@@ -1,4 +1,6 @@
-from meridian.query.prompt import SYSTEM_PROMPT, _source_label, build_user_message, format_sources
+from datetime import datetime, timezone
+
+from meridian.query.prompt import SYSTEM_PROMPT, _relative_days_label, _source_label, build_user_message, format_sources
 from meridian.query.retrieval import RetrievedChunk
 
 
@@ -24,6 +26,62 @@ def test_system_prompt_mentions_placeholders():
 def test_system_prompt_has_no_user_data():
     # a sanity check that this stays a fixed constant with no interpolation
     assert "{" not in SYSTEM_PROMPT
+
+
+def test_system_prompt_mentions_recency_reasoning():
+    assert "today" in SYSTEM_PROMPT.lower()
+    assert "upcoming" in SYSTEM_PROMPT.lower()
+
+
+def test_relative_days_label_past():
+    now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+
+    assert _relative_days_label("2026-05-14T00:00:00+00:00", now) == " (114 days ago)"
+
+
+def test_relative_days_label_future():
+    now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+
+    assert _relative_days_label("2026-09-08T00:00:00+00:00", now) == " (in 3 days)"
+
+
+def test_relative_days_label_today():
+    now = datetime(2026, 9, 5, 12, 0, 0, tzinfo=timezone.utc)
+
+    assert _relative_days_label("2026-09-05T00:00:00+00:00", now) == " (today)"
+
+
+def test_relative_days_label_singular_day():
+    now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+
+    assert _relative_days_label("2026-09-04T00:00:00+00:00", now) == " (1 day ago)"
+    assert _relative_days_label("2026-09-06T00:00:00+00:00", now) == " (in 1 day)"
+
+
+def test_relative_days_label_missing_or_unparseable_date_returns_empty():
+    now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+
+    assert _relative_days_label("", now) == ""
+    assert _relative_days_label("not a date", now) == ""
+
+
+def test_source_label_gmail_includes_relative_days_ago():
+    now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+    label = _source_label(
+        _chunk("gmail", {"sender": "alice@example.com", "sent_at": "2026-05-14T00:00:00+00:00", "subject": "Hi"}),
+        now=now,
+    )
+
+    assert "114 days ago" in label
+
+
+def test_source_label_calendar_includes_relative_days_future():
+    now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+    label = _source_label(
+        _chunk("calendar", {"summary": "Standup", "start_at": "2026-09-08T00:00:00+00:00"}), now=now
+    )
+
+    assert "in 3 days" in label
 
 
 def test_source_label_gmail():
@@ -90,6 +148,21 @@ def test_build_user_message_with_no_chunks():
 
     assert "Question:\nA question with no context" in message
     assert "Context:" in message
+
+
+def test_build_user_message_includes_todays_date():
+    now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+
+    message = build_user_message("What flights do I have?", [], now=now)
+
+    assert "Today's date: 2026-09-05" in message
+    assert message.index("Today's date") < message.index("Question:")
+
+
+def test_build_user_message_defaults_now_when_not_given():
+    message = build_user_message("A question", [])
+
+    assert "Today's date:" in message
 
 
 def test_format_sources_numbers_match_build_user_message():

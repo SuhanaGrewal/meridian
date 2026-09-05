@@ -91,7 +91,7 @@ def ask(
             llm_configured=False,
         )
 
-    user_message = build_user_message(question, result.chunks)
+    user_message = build_user_message(question, result.chunks, now=now)
     tokenization = tokenize_for_external_call(user_message, analyzer=analyzer, logger=logger)
     if audit_log_dir is not None:
         record_event(
@@ -114,6 +114,6 @@ def ask(
         abstained=False,
         abstain_reason=None,
         answer=answer,
-        sources=format_sources(result.chunks),
+        sources=format_sources(result.chunks, now=now),
         llm_configured=True,
     )
