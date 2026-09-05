@@ -8,7 +8,7 @@ _NOW = datetime(2024, 6, 10, tzinfo=timezone.utc)
 _ACCOUNT_EMAIL = "me@example.com"
 
 
-def _message(message_id, thread_id, sender, sent_at, body_text="hello") -> ParsedMessage:
+def _message(message_id, thread_id, sender, sent_at, body_text="hello", label_ids=None) -> ParsedMessage:
     return ParsedMessage(
         message_id=message_id,
         thread_id=thread_id,
@@ -17,7 +17,7 @@ def _message(message_id, thread_id, sender, sent_at, body_text="hello") -> Parse
         recipients=["someone@example.com"],
         sent_at=sent_at,
         body_text=body_text,
-        label_ids=["INBOX"],
+        label_ids=label_ids or ["INBOX"],
         content_hash=f"hash-{message_id}",
     )
 
@@ -69,6 +69,52 @@ def test_multiple_stale_threads_sorted_by_days_quiet_descending(tmp_path):
     threads = find_stale_threads(store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3)
 
     assert [thread.thread_id for thread in threads] == ["t2", "t1"]
+
+
+def test_promotional_category_is_excluded_even_if_stale(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(
+        _message(
+            "m1", "t1", "Newsletter <news@example.com>", "2024-06-01T00:00:00+00:00",
+            label_ids=["INBOX", "CATEGORY_PROMOTIONS"],
+        )
+    )
+
+    threads = find_stale_threads(store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3)
+
+    assert threads == []
+
+
+def test_personal_category_is_not_excluded(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(
+        _message(
+            "m1", "t1", "Alice <alice@example.com>", "2024-06-01T00:00:00+00:00",
+            label_ids=["INBOX", "CATEGORY_PERSONAL"],
+        )
+    )
+
+    threads = find_stale_threads(store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3)
+
+    assert len(threads) == 1
+
+
+def test_max_days_quiet_excludes_ancient_threads(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(_message("m1", "t1", "Alice <alice@example.com>", "2020-01-01T00:00:00+00:00"))
+
+    threads = find_stale_threads(store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3, max_days_quiet=60)
+
+    assert threads == []
+
+
+def test_max_days_quiet_none_means_no_cap(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(_message("m1", "t1", "Alice <alice@example.com>", "2020-01-01T00:00:00+00:00"))
+
+    threads = find_stale_threads(store, _ACCOUNT_EMAIL, now=_NOW, min_days_quiet=3, max_days_quiet=None)
+
+    assert len(threads) == 1
 
 
 def test_snippet_is_truncated_to_200_chars(tmp_path):

@@ -21,6 +21,13 @@ def main() -> None:
         default=3,
         help="Minimum days of silence to count a thread as stale (default: 3).",
     )
+    stale_parser.add_argument(
+        "--max-days",
+        type=int,
+        default=None,
+        help="Optional cap on days of silence - excludes threads quieter than this "
+        "(e.g. --max-days 60 to hide multi-year-old, functionally dead threads).",
+    )
 
     args = parser.parse_args()
 
@@ -35,7 +42,9 @@ def main() -> None:
             print("Account email not captured yet - run `python -m meridian.ingestion.gmail` first.")
             return
 
-        threads = find_stale_threads(store, account_email, min_days_quiet=args.min_days)
+        threads = find_stale_threads(
+            store, account_email, min_days_quiet=args.min_days, max_days_quiet=args.max_days
+        )
         logger.info(
             "stale thread scan complete",
             extra={
