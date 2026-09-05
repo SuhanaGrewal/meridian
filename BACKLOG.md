@@ -6,24 +6,31 @@ we find more. Nothing here is scheduled until explicitly picked up.
 
 ## Next up
 
-### 1. "Upcoming/future" date filtering
-`query/date_range.py` only recognizes phrases that look at the present or
-past ("today," "this week," "last month," "last N days," a weekday name,
-etc.) — there is no phrase for "upcoming," "next week," "future," anything
-forward-looking, in either direction. Found via: asking "what flights do I
-have booked" returned an already-happened May 2026 flight with no way to
-ask for future-only results instead.
+### 1. "Upcoming/future" date filtering (recency-aware answers fixed, explicit phrase filtering still open)
+Two distinct halves. **Fixed**: the answer-framing half — asking "what
+flight bookings do I have" used to present an already-happened May 2026
+flight with no indication it was in the past. `query/prompt.py` now
+computes "(N days ago)" / "(in N days)" deterministically in code for
+every dated context item (gmail `sent_at`, calendar `start_at`) instead of
+asking the LLM to do date arithmetic itself - a real test showed the LLM
+was unreliable at this (correctly called one past item "past" and
+incorrectly called an equally-past item "upcoming" in the same response).
+Real result now: correctly says "there are no upcoming flight bookings"
+while still naming the most recent past one for context.
 
-What it'd take:
+**Still open**: `query/date_range.py` still has no phrase for "upcoming,"
+"next week," "future," anything forward-looking, in either direction - so
+there's no way to explicitly ask retrieval to filter to *only* future
+items (e.g. "what's on my calendar next week"). What it'd take:
 - Add forward-looking phrases to `extract_date_range()` (e.g. "upcoming,"
   "next week," "next month," "in the next N days") returning a
   present-to-future window instead of a past/current one.
 - Decide how this interacts with Gmail: an email's `sent_at` is always in
   the past even when it describes a future event (e.g. a flight
-  confirmation) — a true "upcoming flights" filter would need to read
-  travel *dates mentioned in the content*, not the email's send date. That's
-  a materially harder feature (structured date extraction from free text) —
-  worth explicitly scoping as in/out before starting.
+  confirmation) — a true "upcoming flights" *retrieval filter* would need
+  to read travel *dates mentioned in the content*, not the email's send
+  date. That's a materially harder feature (structured date extraction
+  from free text) — worth explicitly scoping as in/out before starting.
 - Calendar is the straightforward case: `start_at` is a real forward-dated
   field, so "upcoming calendar events" is a clean, achievable filter today.
 
@@ -162,7 +169,14 @@ already-populated databases, no `--full-resync` required. New
 and takes the max `sent_at` per thread; new
 `inbox_intelligence/stale_threads.py::find_stale_threads()` filters out
 threads where the account owner sent the last message and applies the
-staleness threshold.
+staleness threshold. Real smoke test against 1,208 real messages found
+574 "stale" threads, many 7+ years old; excluding gmail's
+CATEGORY_PROMOTIONS/SOCIAL/UPDATES/FORUMS labels and adding `--max-days`
+brought it to 3 genuine ones, but 2 of those 3 turned out to be automated
+visa-processing auto-replies (no CATEGORY_* label catches those since
+they land in the primary inbox) - added a subject/sender heuristic (Auto
+Reply, Out of Office, Undeliverable, no-reply@, etc.) to exclude those
+too. Final real result: 574 -> 1, the one genuine thread.
 
 ### 8. Digest read like a curated newsletter, not a quick status update
 `digest/prompt.py`'s system prompt said "group related items together...
