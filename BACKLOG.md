@@ -15,53 +15,6 @@ and fold the results into `GatheredItem`s (or a dedicated section), likely
 reusing the same "summarize, don't dump raw text" approach `query/router.py`
 already uses for the same data.
 
-### 1. "Upcoming/future" date filtering (recency-aware answers fixed, explicit phrase filtering still open)
-Two distinct halves. **Fixed**: the answer-framing half — asking "what
-flight bookings do I have" used to present an already-happened May 2026
-flight with no indication it was in the past. `query/prompt.py` now
-computes "(N days ago)" / "(in N days)" deterministically in code for
-every dated context item (gmail `sent_at`, calendar `start_at`) instead of
-asking the LLM to do date arithmetic itself - a real test showed the LLM
-was unreliable at this (correctly called one past item "past" and
-incorrectly called an equally-past item "upcoming" in the same response).
-Real result now: correctly says "there are no upcoming flight bookings"
-while still naming the most recent past one for context.
-
-**Still open**: `query/date_range.py` still has no phrase for "upcoming,"
-"next week," "future," anything forward-looking, in either direction - so
-there's no way to explicitly ask retrieval to filter to *only* future
-items (e.g. "what's on my calendar next week"). What it'd take:
-- Add forward-looking phrases to `extract_date_range()` (e.g. "upcoming,"
-  "next week," "next month," "in the next N days") returning a
-  present-to-future window instead of a past/current one.
-- Decide how this interacts with Gmail: an email's `sent_at` is always in
-  the past even when it describes a future event (e.g. a flight
-  confirmation) — a true "upcoming flights" *retrieval filter* would need
-  to read travel *dates mentioned in the content*, not the email's send
-  date. That's a materially harder feature (structured date extraction
-  from free text) — worth explicitly scoping as in/out before starting.
-- Calendar is the straightforward case: `start_at` is a real forward-dated
-  field, so "upcoming calendar events" is a clean, achievable filter today.
-
-### 3. No scheduler — nothing runs automatically (Gmail + digest fixed, rest still manual)
-Every command (ingestion, indexing, digest) was one-shot, run-by-hand
-only. `scripts/install_launchd.sh` now installs two macOS `launchd`
-agents: Gmail sync every 10 minutes (then reindexes just the gmail
-source), and a nightly digest at a configurable hour. `DIGEST_DAYS` in
-`.env` restricts which days the digest actually runs (comma-separated
-3-letter day names, e.g. `mon,wed,fri`; empty = every day) - checked by
-`scripts/nightly_digest.sh` itself, not baked into the plist, so it's a
-config setting rather than the "when the user logs in" login-screen
-concept originally requested (there's no login/account system in this
-local single-user tool for that to mean anything). `./scripts/uninstall_launchd.sh`
-removes both jobs. Not installed by me - `launchctl load` is a
-system-level change, left for the user to trigger deliberately.
-- Still manual, not on this scheduler: Calendar, Docs, and local-files
-  ingestion. Could be added to the same 10-minute job or their own
-  cadence if wanted.
-
-
-
 ### 11. Draft replies in the user's voice, adjusted by relationship, approvable/editable — NEEDS A DECISION FIRST
 Requested (as part of Inbox Intelligence): draft replies matching how the
 user actually writes, adjusted by relationship to the recipient (e.g.
@@ -90,6 +43,66 @@ bundle.
 
 
 ## Fixed
+
+### 1. "Upcoming/future" date filtering
+Two distinct halves, both now fixed. The answer-framing half: asking
+"what flight bookings do I have" used to present an already-happened
+flight with no indication it was in the past. `query/prompt.py` now
+computes "(N days ago)" / "(in N days)" deterministically in code for
+every dated context item (gmail `sent_at`, calendar `start_at`) instead of
+asking the LLM to do date arithmetic itself - a real test showed the LLM
+was unreliable at this (correctly called one past item "past" and
+incorrectly called an equally-past item "upcoming" in the same response).
+
+The retrieval-filtering half: `query/date_range.py` had no phrase for
+"upcoming," "next week," anything forward-looking, so there was no way to
+explicitly filter retrieval to *only* future items. Added forward-looking
+counterparts alongside the existing backward-looking ones: "next week,"
+"next month" (with year rollover), "next year," "next N days," "next
+<weekday>" (the next occurrence strictly ahead, not today even if today
+is that weekday), and a bare "upcoming" (30-day default window) -
+inserted alongside their existing backward equivalents, same function
+structure. Calendar's `start_at` is a genuinely forward-dated field so
+this is a clean filter there; an email's `sent_at` is always in the past
+even when its *content* describes a future event (e.g. a flight
+confirmation) - reading travel dates out of message content would be a
+separate, materially harder feature, intentionally out of scope here.
+
+### 3. No scheduler — nothing runs automatically
+Every command (ingestion, indexing, digest) was one-shot, run-by-hand
+only. `scripts/install_launchd.sh` installs macOS `launchd` agents
+covering every source, not just Gmail: `scripts/sync_all.sh` (renamed
+from `sync_gmail.sh`) runs Gmail, Calendar, and Docs ingestion
+unconditionally every 10 minutes, and local-files ingestion
+conditionally (skipped gracefully, not erroring the whole job, when
+`MERIDIAN_NOTES_FOLDER` isn't set in `.env`), then reindexes everything
+incrementally. `DIGEST_DAYS` in `.env` restricts which days the digest
+actually runs (comma-separated 3-letter day names, e.g. `mon,wed,fri`;
+empty = every day) - checked by `scripts/nightly_digest.sh` itself, not
+baked into the plist, so it's a config setting rather than the "when the
+user logs in" login-screen concept originally requested (there's no
+login/account system in this local single-user tool for that to mean
+anything). `./scripts/uninstall_launchd.sh` removes the jobs (and cleans
+up the old Gmail-only job name if present from before this fix). Not
+installed automatically - `launchctl load` is a system-level change, left
+for the user to trigger deliberately.
+
+### 4. `query` couldn't handle broad/open-ended asks
+Questions like "summarize my recent emails" or "what's been happening
+lately" structurally couldn't be answered by the fact-lookup retrieval
+path (it scores individual small chunks against the question - no single
+chunk is "about" a broad meta-question, so it correctly abstained rather
+than hallucinate). Added a 5th router intent, BROAD_SUMMARY, alongside
+the original four from #17 - it reuses `digest/gather.py::gather_items()`
+wholesale rather than reimplementing "gather recent items," which had the
+side benefit of inheriting #16's promotional-filtering fix and #19's
+digest-tone rewrite "for free," since both live in the code being reused.
+Honors a recognized date phrase in the question itself (thanks to #1
+above); otherwise defaults to a 7-day lookback, same philosophy as
+digest's own lookback-hours default. Falls through to `general` (not an
+error) if the caller hasn't wired up the four stores this needs
+(calendar/docs/notes/entity) - same pattern as every other optional
+router dependency.
 
 ### 19. Commitment scanner flagged boilerplate SLA text as a real promise
 Requested: an email about a hotel booking from 2 months ago was coming in
@@ -409,20 +422,6 @@ message's `TimeoutError` mid-sync. Fixed by catching `TimeoutError`/
 `ConnectionError` and retrying them the same way as a 5xx.
 
 ## Also found, not yet actioned
-
-### 4. `query` can't handle broad/open-ended asks (routing infrastructure now exists, this specific case still doesn't)
-Questions like "summarize my recent emails" or "what is my CV like"
-structurally can't be answered well by the fact-lookup retrieval path (it
-scores individual small chunks against the question — no single chunk is
-"about" a broad meta-question, so it correctly abstains rather than
-hallucinate). The `digest` command is the right tool for "gather recent
-stuff."
-- `query/router.py` (see #17, below) is now exactly the "lightweight
-  router in front of query" this item originally proposed - but it
-  currently only recognizes stale_threads/commitments/resolve/general.
-  Extending it with a fifth "broad summarization" intent that redirects
-  to gather-style retrieval is a natural, now-easy follow-up, not yet
-  done.
 
 ### 5. No consumer-facing interface
 CLI-only today — no chat window, no notifications when a digest is ready.
