@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS sync_state (
     id              INTEGER PRIMARY KEY CHECK (id = 1),
     last_history_id TEXT,
-    last_synced_at  TEXT
+    last_synced_at  TEXT,
+    account_email   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS dead_letters (
@@ -55,7 +56,17 @@ class GmailStore:
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate_account_email_column()
         self._conn.commit()
+
+    def _migrate_account_email_column(self) -> None:
+        """sync_state predates account_email - CREATE TABLE IF NOT EXISTS is
+        a no-op on a database that already has the table with fewer
+        columns, so an existing database needs the column added
+        explicitly."""
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(sync_state)")}
+        if "account_email" not in columns:
+            self._conn.execute("ALTER TABLE sync_state ADD COLUMN account_email TEXT")
 
     def close(self) -> None:
         self._conn.close()
@@ -142,6 +153,20 @@ class GmailStore:
         with self._conn:
             self._conn.execute("DELETE FROM sync_state WHERE id = 1")
 
+    def get_account_email(self) -> str | None:
+        row = self._conn.execute("SELECT account_email FROM sync_state WHERE id = 1").fetchone()
+        return row["account_email"] if row is not None else None
+
+    def set_account_email(self, email: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO sync_state (id, account_email) VALUES (1, ?)
+                ON CONFLICT(id) DO UPDATE SET account_email = excluded.account_email
+                """,
+                (email,),
+            )
+
     def get_message_row(self, message_id: str) -> sqlite3.Row | None:
         return self._conn.execute(
             "SELECT * FROM messages WHERE message_id = ?", (message_id,)
@@ -162,4 +187,22 @@ class GmailStore:
         return self._conn.execute(
             "SELECT * FROM messages WHERE sent_at >= ? AND is_deleted = 0 ORDER BY sent_at",
             (since,),
+        ).fetchall()
+
+    def list_latest_message_per_thread(self) -> list[sqlite3.Row]:
+        """one row per thread_id - the most recent non-deleted message in
+        it. the basis for detecting whose "move" it is in a thread: if the
+        latest message wasn't sent by the account owner, the thread is
+        waiting on a reply."""
+        return self._conn.execute(
+            """
+            SELECT m.* FROM messages m
+            INNER JOIN (
+                SELECT thread_id, MAX(sent_at) AS max_sent_at
+                FROM messages
+                WHERE is_deleted = 0
+                GROUP BY thread_id
+            ) latest ON m.thread_id = latest.thread_id AND m.sent_at = latest.max_sent_at
+            WHERE m.is_deleted = 0
+            """
         ).fetchall()

@@ -2,12 +2,19 @@ from meridian.ingestion.gmail.message_parser import ParsedMessage
 from meridian.ingestion.gmail.store import GmailStore
 
 
-def _message(message_id="msg-1", label_ids=None, body_text="hello", sent_at="2024-01-01T00:00:00+00:00") -> ParsedMessage:
+def _message(
+    message_id="msg-1",
+    label_ids=None,
+    body_text="hello",
+    sent_at="2024-01-01T00:00:00+00:00",
+    thread_id="thread-1",
+    sender="alice@example.com",
+) -> ParsedMessage:
     return ParsedMessage(
         message_id=message_id,
-        thread_id="thread-1",
+        thread_id=thread_id,
         subject="Subject",
-        sender="alice@example.com",
+        sender=sender,
         recipients=["bob@example.com"],
         sent_at=sent_at,
         body_text=body_text,
@@ -137,3 +144,85 @@ def test_list_messages_since_excludes_deleted_messages(tmp_path):
     rows = store.list_messages_since("2024-01-01T00:00:00+00:00")
 
     assert rows == []
+
+
+def test_get_account_email_returns_none_before_it_is_set(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+
+    assert store.get_account_email() is None
+
+
+def test_set_and_get_account_email_roundtrip(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+
+    store.set_account_email("me@example.com")
+
+    assert store.get_account_email() == "me@example.com"
+
+
+def test_set_account_email_does_not_clobber_existing_sync_state(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.set_sync_state("1000")
+
+    store.set_account_email("me@example.com")
+
+    assert store.get_sync_state().last_history_id == "1000"
+    assert store.get_account_email() == "me@example.com"
+
+
+def test_set_sync_state_does_not_clobber_existing_account_email(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.set_account_email("me@example.com")
+
+    store.set_sync_state("1000")
+
+    assert store.get_account_email() == "me@example.com"
+    assert store.get_sync_state().last_history_id == "1000"
+
+
+def test_account_email_column_is_added_to_a_pre_existing_database(tmp_path):
+    """simulates a database created before account_email existed - the
+    table is created with the old two-column schema directly, bypassing
+    GmailStore, then GmailStore must migrate it in on open without
+    raising or losing the existing row."""
+    import sqlite3
+
+    db_path = tmp_path / "gmail.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE sync_state (id INTEGER PRIMARY KEY CHECK (id = 1), last_history_id TEXT, last_synced_at TEXT)"
+    )
+    conn.execute("INSERT INTO sync_state (id, last_history_id, last_synced_at) VALUES (1, 'old-id', 'old-time')")
+    conn.commit()
+    conn.close()
+
+    store = GmailStore(db_path)
+
+    assert store.get_sync_state().last_history_id == "old-id"
+    assert store.get_account_email() is None
+    store.set_account_email("me@example.com")
+    assert store.get_account_email() == "me@example.com"
+
+
+def test_list_latest_message_per_thread_returns_one_row_per_thread(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(_message(message_id="m1", thread_id="t1", sent_at="2024-06-01T00:00:00+00:00"))
+    store.upsert_message(_message(message_id="m2", thread_id="t1", sent_at="2024-06-05T00:00:00+00:00"))
+    store.upsert_message(_message(message_id="m3", thread_id="t2", sent_at="2024-06-03T00:00:00+00:00"))
+
+    rows = store.list_latest_message_per_thread()
+
+    by_thread = {row["thread_id"]: row["message_id"] for row in rows}
+    assert by_thread == {"t1": "m2", "t2": "m3"}
+
+
+def test_list_latest_message_per_thread_excludes_deleted_messages(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    store.upsert_message(_message(message_id="m1", thread_id="t1", sent_at="2024-06-01T00:00:00+00:00"))
+    store.upsert_message(_message(message_id="m2", thread_id="t1", sent_at="2024-06-05T00:00:00+00:00"))
+    store.mark_deleted("m2")
+
+    rows = store.list_latest_message_per_thread()
+
+    assert len(rows) == 1
+    assert rows[0]["message_id"] == "m1"

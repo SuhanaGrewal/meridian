@@ -76,23 +76,66 @@ What it'd take:
 - A proposal-and-approval step consistent with the project's "nothing acts
   autonomously" principle - suggest, don't book.
 
-### 11. Digest includes drafted emails, approvable/rejectable/editable per item — NEEDS A DECISION FIRST
-Requested: the digest should come with drafted email replies, each
-individually approvable, rejectable, or editable.
-**Flagging before any implementation**: drafting is straightforward
-(Claude can write a reply given context, same mechanism as answer
-generation). But *sending* an approved draft requires giving Meridian a
-brand-new Google OAuth scope (`gmail.send` or `gmail.compose`) on top of
-the 4 read-only scopes (`gmail.readonly`, `calendar.readonly`,
-`documents.readonly`, `drive.readonly`) it has today. Every design
-principle in `CLAUDE.md` and the README so far is built around "read-only,
-nothing ever sends or executes on its own" - "approval means accepting the
-digest itself, not authorizing an outbound action" is stated explicitly in
-the Phase 10 README section. This would be the first time that stops being
-true. Also needs per-item approval granularity in the digest review flow
-(today's `digest review --approve/--reject` decides the whole run, not
-individual items). Wants an explicit go-ahead before starting, not just
-folding into a larger feature bundle.
+### 11. Draft replies in the user's voice, adjusted by relationship, approvable/editable — NEEDS A DECISION FIRST
+Requested (as part of Inbox Intelligence): draft replies matching how the
+user actually writes, adjusted by relationship to the recipient (e.g.
+more formal for a manager, casual for a friend), each individually
+approvable/rejectable/editable.
+**Flagging before any implementation**: drafting text is straightforward
+(same mechanism as `query`'s answer generation), but two real design
+gaps exist before it'd be any good: (1) no "voice profile" exists - would
+need to build one from the user's own past sent messages, which first
+requires being able to tell sent vs. received mail apart (today's
+`messages` table has no "is this from me" concept - the same
+`account_email` captured for backlog #13 makes this newly possible); (2)
+no "relationship to this contact" concept exists - would need inferring
+from `entity_graph` (e.g. frequency/reciprocity of contact) or explicit
+tagging, not obvious which without discussion.
+**Separately, and more fundamentally**: *sending* an approved draft
+requires giving Meridian a brand-new Google OAuth scope (`gmail.send` or
+`gmail.compose`) on top of the 4 read-only scopes it has today. Every
+design principle in `CLAUDE.md` and the README so far is built around
+"read-only, nothing ever sends or executes on its own." This would be the
+first time that stops being true. Also needs per-item approval granularity
+in whatever review flow surfaces these (today's `digest review
+--approve/--reject` decides a whole run, not individual items). Wants an
+explicit go-ahead before starting, not just folding into a larger feature
+bundle.
+
+### 14. Soft-commitment tracking ("I'll send this by Friday" → trackable follow-up)
+Requested (Inbox Intelligence): detect commitments buried in email prose
+- made by the user or made to the user - and convert them into trackable
+follow-ups with a resolved/unresolved status and a deadline.
+What it'd take:
+- An LLM extraction pass over message bodies (regex won't catch "I'll get
+  this over by end of week" reliably) - needs prompt design, and scoping
+  which messages get scanned (all of them is expensive; newest-first,
+  incrementally, is more realistic).
+- Resolving a relative date phrase ("by Friday," "end of week") against
+  the message's own `sent_at`, not "now" - `query/date_range.py`'s phrases
+  are relative to the current moment, not a historical anchor, so this
+  needs new date-resolution logic, not a direct reuse.
+- A persisted commitments/follow-ups store (new) with a resolved/
+  unresolved status, and a way to check if a commitment got fulfilled
+  (did a matching attachment/reply show up before or after the deadline).
+- Overlaps conceptually with backlog #9 (follow-up tracking on the user's
+  own past questions) - likely the same underlying store, worth designing
+  together rather than as two unrelated systems.
+
+### 15. Merge context across threads about the same thing or person
+Requested (Inbox Intelligence): recognize that several differently-subject-
+lined threads are actually about the same topic or person, and merge that
+context.
+What it'd take:
+- For "same person": `entity_graph` (Phase 9) already does cross-source
+  identity resolution - this part may already be substantially covered,
+  worth checking against real data before building anything new.
+- For "same topic" (e.g. three threads with different subjects that are
+  all actually about the Q3 budget): a genuinely new capability - topic
+  clustering/deduplication across threads, not just entity identity. No
+  existing mechanism in this codebase does this; would need real scoping
+  (embedding-similarity clustering? LLM-judged? at what threshold?) before
+  starting.
 
 ### 12. Calendar notifications
 Requested: proactive alerts (e.g. "meeting in 15 minutes"), not just
@@ -105,6 +148,21 @@ background process or a very frequent scheduled check (e.g. every minute)
 "digest is ready" notification if #5 is ever built.
 
 ## Fixed
+
+### 13. Inbox Intelligence: stale-thread detection ("your move")
+First piece of Inbox Intelligence (the "really good RAG + reminders" track,
+separate from the digest). `python -m meridian.inbox_intelligence
+stale-threads` lists Gmail threads where the last message wasn't from the
+account owner and it's been quiet for 3+ days (`--min-days` to change).
+Needed the account's own email address, which nothing captured before -
+now grabbed for free from the `getProfile` call gmail sync already makes,
+self-healing on the very next sync (full or incremental) for
+already-populated databases, no `--full-resync` required. New
+`gmail/store.py::list_latest_message_per_thread()` groups by `thread_id`
+and takes the max `sent_at` per thread; new
+`inbox_intelligence/stale_threads.py::find_stale_threads()` filters out
+threads where the account owner sent the last message and applies the
+staleness threshold.
 
 ### 8. Digest read like a curated newsletter, not a quick status update
 `digest/prompt.py`'s system prompt said "group related items together...

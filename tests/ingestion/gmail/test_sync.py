@@ -108,7 +108,8 @@ class _FakeService:
     def __init__(self, *, profile=None, list_pages=None, get_responses=None, history_pages=None):
         self.messages_double = _FakeMessages(list_pages or [], get_responses or {})
         self.history_double = _FakeHistory(history_pages or [])
-        self._users = _FakeUsers(profile, self.messages_double, self.history_double)
+        merged_profile = {"emailAddress": "me@example.com", **(profile or {})}
+        self._users = _FakeUsers(merged_profile, self.messages_double, self.history_double)
 
     def users(self):
         return self._users
@@ -175,6 +176,34 @@ def test_full_backfill_is_idempotent_when_rerun(tmp_path):
     _full_backfill(service_two, store, rate_limiter=None, logger=None, query="")
 
     assert store.count_messages() == 1
+
+
+def test_first_run_captures_account_email(tmp_path):
+    store = GmailStore(tmp_path / "gmail.db")
+    service = _FakeService(
+        profile={"historyId": "1000", "emailAddress": "suhana@example.com"},
+        list_pages=[{"messages": []}],
+    )
+
+    run_sync(service, store)
+
+    assert store.get_account_email() == "suhana@example.com"
+
+
+def test_incremental_sync_captures_account_email_when_missing(tmp_path):
+    """covers a database that was already fully backfilled before
+    account_email existed - the very next sync, even an incremental one,
+    must self-heal and capture it without needing a --full-resync."""
+    store = GmailStore(tmp_path / "gmail.db")
+    store.set_sync_state("500")
+    service = _FakeService(
+        profile={"emailAddress": "suhana@example.com"},
+        history_pages=[{"history": [], "historyId": "500"}],
+    )
+
+    run_sync(service, store)
+
+    assert store.get_account_email() == "suhana@example.com"
 
 
 def test_incremental_sync_uses_stored_history_id(tmp_path):

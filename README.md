@@ -591,3 +591,30 @@ Only Gmail sync and the digest are scheduled today — Calendar, Docs, and
 local-files ingestion still need to be run by hand (`python -m
 meridian.ingestion.calendar`, etc.), or added to `scripts/sync_gmail.sh`'s
 job if you want them on the same 10-minute cadence.
+
+## Inbox Intelligence
+
+A new, separate track from the digest: proactive analysis of your inbox
+rather than a periodic summary. Operates entirely on already-ingested
+Gmail data (`data/ingestion/gmail/gmail.db`) - no new API scopes, no
+network calls beyond the account-email lookup gmail sync already does.
+
+**Stale threads ("your move")** - detects threads where the last message
+wasn't from you and it's been quiet for a while:
+
+```
+python -m meridian.inbox_intelligence stale-threads
+python -m meridian.inbox_intelligence stale-threads --min-days 5
+```
+
+Needs your account's own email address to know whose "move" it is - this
+is captured automatically the next time `python -m meridian.ingestion.gmail`
+runs (whether a fresh backfill or an incremental sync), no separate setup
+step. If you see "Account email not captured yet," just run the gmail sync
+once first.
+
+This is the first of several inbox-intelligence capabilities being built
+incrementally - tracking soft commitments buried in prose ("I'll send this
+by Friday"), merging context across threads about the same thing/person,
+and drafting replies in your voice are tracked in `BACKLOG.md`, not yet
+built.

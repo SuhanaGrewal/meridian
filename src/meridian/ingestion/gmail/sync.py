@@ -39,6 +39,9 @@ def run_sync(
     start = time.monotonic()
     sync_state = store.get_sync_state()
 
+    if store.get_account_email() is None:
+        _capture_account_email(service, store, rate_limiter=rate_limiter, logger=logger)
+
     if sync_state.last_history_id is None:
         stats = _full_backfill(service, store, rate_limiter=rate_limiter, logger=logger, query=query)
     else:
@@ -76,6 +79,20 @@ def run_sync(
         )
 
     return stats
+
+
+def _capture_account_email(service, store, *, rate_limiter, logger) -> None:
+    """one-time, self-healing: runs on whichever sync (full or
+    incremental) first notices account_email hasn't been captured yet -
+    covers both a brand-new database and an existing one from before this
+    field existed, without requiring a disruptive --full-resync."""
+    profile = execute_with_retry(
+        service.users().getProfile(userId="me"),
+        rate_limiter=rate_limiter,
+        logger=logger,
+        operation="gmail.get_profile",
+    )
+    store.set_account_email(profile["emailAddress"])
 
 
 def _full_backfill(service, store, *, rate_limiter, logger, query: str) -> SyncStats:
