@@ -61,19 +61,6 @@ system-level change, left for the user to trigger deliberately.
   cadence if wanted.
 
 
-### 10. Reminder/task intake + proactive scheduling suggestions
-Requested: "remind me to meet with Nick" should be recognized as a task
-(not a question), and a future digest (or immediate response) should
-propose a specific free time slot from the calendar for approval.
-What it'd take:
-- A new intake path distinct from `query` (which only answers questions)
-  and `digest` (which only summarizes) - recognizing an imperative
-  statement as a task to track, not something to search-and-answer.
-- A persisted reminders/tasks store (new).
-- Free/busy computation against the already-ingested calendar data
-  (straightforward - the data's there) to find open slots.
-- A proposal-and-approval step consistent with the project's "nothing acts
-  autonomously" principle - suggest, don't book.
 
 ### 11. Draft replies in the user's voice, adjusted by relationship, approvable/editable — NEEDS A DECISION FIRST
 Requested (as part of Inbox Intelligence): draft replies matching how the
@@ -219,6 +206,36 @@ existed yet), then ran a real digest - it re-checked the question, still
 found nothing, and opened with "You're still waiting on a reply about the
 Lisbon trip that you asked about just now, and we don't have a confident
 answer for you yet [1]," citing the follow-up item by source.
+
+### 10. Reminder/task intake + proactive scheduling suggestions
+Requested: "remind me to meet with Nick" should be recognized as a task
+(not a question), and a future digest (or immediate response) should
+propose a specific free time slot from the calendar for approval.
+
+Added a 6th router intent, REMINDER, alongside the other five from #17 -
+the same "everything is a text message" entry point, not a separate
+intake surface. New `reminders/store.py::ReminderStore` (`data/reminders/
+reminders.db`) persists the raw reminder text plus whatever slot got
+proposed; new `reminders/scheduling.py::propose_free_slot()` is a
+deterministic interval-scan (existing calendar events as busy blocks,
+business hours 9-5 on weekdays, first open gap of the requested duration
+over the next week) - no LLM guessing at times, the same lesson already
+applied to date-range parsing and commitment deadlines elsewhere in this
+project. The router's existing RESOLVE intent was extended to also match
+against pending reminders, so "the Nick reminder is done" dismisses it the
+same way a thread or commitment gets dismissed. There's no calendar-write
+path anywhere in this project (read-only OAuth, per CLAUDE.md), so
+"propose, don't book" isn't just a policy choice here - there's structurally
+nothing to book with; the reminder's job ends at proposing a slot.
+
+Also has its own CLI (`python -m meridian.reminders add/list/dismiss`) as
+a direct escape hatch, mirroring `inbox_intelligence`'s CLI-alongside-router
+pattern.
+
+Verified against real data end to end: "remind me to meet with Nick"
+correctly classified as REMINDER, recorded, and proposed a real open slot
+from the actual calendar; "mark the accountant reminder as resolved"
+correctly matched and dismissed it via the router's RESOLVE path.
 
 ### 17. Natural-language router: "everything is a text message"
 Requested: instead of separate CLI subcommands per capability, a single

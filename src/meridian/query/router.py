@@ -20,9 +20,10 @@ from meridian.query.router_prompt import (
     build_stale_threads_user_message,
 )
 from meridian.redaction.tokenize import tokenize_for_external_call, untokenize
+from meridian.reminders.scheduling import propose_free_slot
 from meridian.security.audit_log import record_event
 
-Intent = Literal["stale_threads", "commitments", "resolve", "broad_summary", "general"]
+Intent = Literal["stale_threads", "commitments", "resolve", "broad_summary", "reminder", "general"]
 
 # default backward-looking window for a broad ask with no recognized date
 # phrase of its own (e.g. "summarize my recent emails") - matches
@@ -86,6 +87,8 @@ def classify_intent(
         return "resolve"
     if "BROAD_SUMMARY" in normalized:
         return "broad_summary"
+    if "REMINDER" in normalized:
+        return "reminder"
     return "general"
 
 
@@ -158,15 +161,44 @@ def _summarize_broad_ask(
     )
 
 
+def _handle_reminder(
+    text: str,
+    *,
+    reminder_store: Any,
+    calendar_store: Any,
+    now: datetime,
+) -> str:
+    """records the reminder verbatim and, if a calendar is available,
+    proposes (never books - see reminders/store.py) the first open slot
+    over the next week via deterministic interval-scanning, not an LLM
+    guess. calendar_store being None (no store wired up by the caller)
+    still records the reminder, just without a proposed slot."""
+    slot = propose_free_slot(calendar_store, now=now) if calendar_store is not None else None
+    slot_start_iso = slot[0].isoformat() if slot else None
+    slot_end_iso = slot[1].isoformat() if slot else None
+    reminder_store.add_reminder(text, proposed_slot_start=slot_start_iso, proposed_slot_end=slot_end_iso)
+
+    if slot is None:
+        return f"Got it, I've noted this as a reminder: \"{text}\". No open calendar slot found in the next week."
+    weekday = slot[0].strftime("%A")
+    start_time = slot[0].strftime("%I:%M %p").lstrip("0")
+    end_time = slot[1].strftime("%I:%M %p").lstrip("0")
+    return (
+        f"Got it, I've noted this as a reminder: \"{text}\". "
+        f"Based on your calendar, you're free {weekday} {start_time} to "
+        f"{end_time} - let me know if that works, nothing is booked automatically."
+    )
+
+
 @dataclass(frozen=True)
 class _ResolvableItem:
-    kind: Literal["thread", "commitment"]
+    kind: Literal["thread", "commitment", "reminder"]
     item_id: str
     label: str
 
 
 def _resolve_matching_item(
-    text: str, threads: list[Any], commitments: list[Any], inbox_store: Any,
+    text: str, threads: list[Any], commitments: list[Any], reminders: list[Any], inbox_store: Any, reminder_store: Any,
     *, client: Any, model: str, analyzer: Any,
     logger: logging.Logger | None = None, audit_log_dir: Path | None = None,
 ) -> str:
@@ -176,6 +208,9 @@ def _resolve_matching_item(
     ] + [
         _ResolvableItem(kind="commitment", item_id=row["commitment_id"], label=row["description"])
         for row in commitments
+    ] + [
+        _ResolvableItem(kind="reminder", item_id=row["reminder_id"], label=f"Reminder: {row['reminder_text']}")
+        for row in reminders
     ]
     if not candidates:
         return "There's nothing open right now to mark as resolved."
@@ -199,6 +234,8 @@ def _resolve_matching_item(
         item = candidates[index]
         if item.kind == "thread":
             inbox_store.dismiss_thread(item.item_id)
+        elif item.kind == "reminder":
+            reminder_store.dismiss(item.item_id)
         else:
             inbox_store.mark_resolved(item.item_id)
         resolved_labels.append(item.label)
@@ -221,24 +258,28 @@ def route(
     docs_store: Any = None,
     notes_store: Any = None,
     entity_store: Any = None,
+    reminder_store: Any = None,
     now: datetime | None = None,
     logger: logging.Logger | None = None,
     audit_log_dir: Path | None = None,
 ) -> RouterResult:
     """classifies a free-text message into stale_threads / commitments /
-    resolve / broad_summary / general, and directly answers the first
-    four (general falls through to query.answer.ask(), handled by the
-    caller). This is the "everything is a text message" entry point - a
-    real frontend wouldn't expose separate CLI subcommands per
+    resolve / broad_summary / reminder / general, and directly answers the
+    first five (general falls through to query.answer.ask(), handled by
+    the caller). This is the "everything is a text message" entry point -
+    a real frontend wouldn't expose separate CLI subcommands per
     capability, it maps one text box to whichever backend actually
     answers the question. calendar_store/docs_store/notes_store/
-    entity_store are only needed for broad_summary - if the caller
-    doesn't have them wired up, a broad ask just falls through to
-    general instead of erroring."""
+    entity_store are only needed for broad_summary, reminder_store only
+    for reminder - if the caller doesn't have the stores an intent needs
+    wired up, that intent just falls through to general instead of
+    erroring."""
     now = now if now is not None else datetime.now(tz=timezone.utc)
     intent = classify_intent(text, client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir)
 
     if intent == "broad_summary" and None in (calendar_store, docs_store, notes_store, entity_store):
+        intent = "general"
+    if intent == "reminder" and reminder_store is None:
         intent = "general"
 
     if intent in ("stale_threads", "resolve") and account_email is None:
@@ -267,11 +308,16 @@ def route(
             exclude_thread_ids=inbox_store.list_dismissed_thread_ids(),
         )
         commitments = inbox_store.list_open_commitments()
+        reminders = reminder_store.list_pending_reminders() if reminder_store is not None else []
         answer = _resolve_matching_item(
-            text, threads, commitments, inbox_store,
+            text, threads, commitments, reminders, inbox_store, reminder_store,
             client=client, model=model, analyzer=analyzer, logger=logger, audit_log_dir=audit_log_dir,
         )
         return RouterResult(intent="resolve", answer=answer)
+
+    if intent == "reminder":
+        answer = _handle_reminder(text, reminder_store=reminder_store, calendar_store=calendar_store, now=now)
+        return RouterResult(intent="reminder", answer=answer)
 
     if intent == "broad_summary":
         answer = _summarize_broad_ask(

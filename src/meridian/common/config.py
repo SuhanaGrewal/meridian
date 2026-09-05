@@ -51,6 +51,10 @@ class Config:
     def query_dir(self) -> Path:
         return self.data_dir / "query"
 
+    @property
+    def reminders_dir(self) -> Path:
+        return self.data_dir / "reminders"
+
 
 def load_config(*, load_env_file=True) -> Config:
     if load_env_file:
@@ -86,3 +90,4 @@ def ensure_dirs(config: Config) -> None:
     config.security_dir.mkdir(parents=True, exist_ok=True)
     config.inbox_intelligence_dir.mkdir(parents=True, exist_ok=True)
     config.query_dir.mkdir(parents=True, exist_ok=True)
+    config.reminders_dir.mkdir(parents=True, exist_ok=True)

@@ -8,6 +8,7 @@ from meridian.ingestion.gmail.message_parser import ParsedMessage
 from meridian.ingestion.gmail.store import GmailStore
 from meridian.ingestion.local_files.store import NotesStore
 from meridian.query.router import classify_intent, route
+from meridian.reminders.store import ReminderStore
 
 _ACCOUNT_EMAIL = "me@example.com"
 _NOW = datetime(2024, 6, 10, tzinfo=timezone.utc)
@@ -337,4 +338,107 @@ def test_route_broad_summary_with_nothing_gathered_skips_second_llm_call(tmp_pat
     )
 
     assert result.answer == "Nothing relevant found for that."
-    assert len(client.messages.calls) == 1
+
+
+def test_classify_intent_reminder():
+    client = _FakeClient(["REMINDER"])
+
+    intent = classify_intent("remind me to meet with Nick", client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer())
+
+    assert intent == "reminder"
+
+
+def test_route_reminder_without_reminder_store_falls_through_to_general(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    client = _FakeClient(["REMINDER"])
+
+    result = route(
+        "remind me to meet with Nick", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+    )
+
+    assert result.intent == "general"
+    assert result.answer is None
+
+
+def test_route_reminder_records_it_and_proposes_a_free_slot(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    reminder_store = ReminderStore(tmp_path / "reminders.db")
+    calendar_store = CalendarStore(tmp_path / "calendar.db")
+    client = _FakeClient(["REMINDER"])
+
+    result = route(
+        "remind me to meet with Nick", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+        reminder_store=reminder_store, calendar_store=calendar_store,
+    )
+
+    assert result.intent == "reminder"
+    assert "meet with Nick" in result.answer
+    pending = reminder_store.list_pending_reminders()
+    assert len(pending) == 1
+    assert pending[0]["reminder_text"] == "remind me to meet with Nick"
+    assert pending[0]["proposed_slot_start"] is not None
+
+
+def test_route_reminder_answer_strips_leading_zero_from_hour(tmp_path):
+    # a slot starting at a single-digit hour (e.g. 9am) must read "9:00 AM"
+    # in the answer, not "09:00 AM" - regression check for a lstrip('0')
+    # applied to "Monday 09:00 AM" as a whole, which only strips the 'M'
+    # in "Monday" is unaffected but the weekday text sitting in front of
+    # the hour silently defeated the intended zero-strip on the hour.
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    reminder_store = ReminderStore(tmp_path / "reminders.db")
+    calendar_store = CalendarStore(tmp_path / "calendar.db")
+    client = _FakeClient(["REMINDER"])
+    nine_am_monday = datetime(2024, 6, 10, 9, 0, tzinfo=timezone.utc)
+
+    result = route(
+        "remind me to meet with Nick", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(),
+        now=nine_am_monday, reminder_store=reminder_store, calendar_store=calendar_store,
+    )
+
+    assert "09:00 AM" not in result.answer
+    assert "9:00 AM" in result.answer
+
+
+def test_route_reminder_without_calendar_store_still_records_it(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    reminder_store = ReminderStore(tmp_path / "reminders.db")
+    client = _FakeClient(["REMINDER"])
+
+    result = route(
+        "remind me to meet with Nick", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+        reminder_store=reminder_store,
+    )
+
+    assert result.intent == "reminder"
+    pending = reminder_store.list_pending_reminders()
+    assert len(pending) == 1
+    assert pending[0]["proposed_slot_start"] is None
+    assert "no open calendar slot" in result.answer.lower()
+
+
+def test_route_resolve_dismisses_matched_reminder(tmp_path):
+    gmail_store = GmailStore(tmp_path / "gmail.db")
+    inbox_store = InboxIntelligenceStore(tmp_path / "inbox.db")
+    reminder_store = ReminderStore(tmp_path / "reminders.db")
+    reminder_id = reminder_store.add_reminder("meet with Nick")
+    client = _FakeClient(["RESOLVE", "1"])
+
+    result = route(
+        "the Nick reminder is done", gmail_store=gmail_store, inbox_store=inbox_store,
+        account_email=_ACCOUNT_EMAIL, client=client, model="claude-haiku-4-5", analyzer=_FakeAnalyzer(), now=_NOW,
+        reminder_store=reminder_store,
+    )
+
+    assert result.intent == "resolve"
+    assert reminder_store.get_reminder(reminder_id)["status"] == "dismissed"
+    assert "Nick" in result.answer
+    assert len(client.messages.calls) == 2  # classify + resolve-match

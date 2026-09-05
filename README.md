@@ -686,8 +686,23 @@ weekday names and relative-day phrases are; unresolvable phrases show no
 due date rather than a guessed one. `resolve-commitment` is manual only -
 there's no automatic fulfillment detection.
 
-Merging context across threads about the same thing/person, and drafting
-replies in your voice, are tracked in `BACKLOG.md`, not yet built.
+Drafting replies in your voice is tracked in `BACKLOG.md`, not yet built.
+Merging context across threads about the same topic is built (see the
+topic graph under Phase 9 above); reminder intake is documented below.
+
+**Reminder intake** - "remind me to meet with Nick" is recognized as a
+task to track, not a question to answer, and (if a calendar is available)
+gets a proposed free slot from the next week's actual calendar - a
+deterministic scan of existing events for an open gap in business hours,
+never an LLM guess at times. Nothing is ever booked - there's no
+calendar-write path anywhere in this project to book it with even if it
+wanted to:
+
+```
+python -m meridian.reminders add "meet with Nick"
+python -m meridian.reminders list
+python -m meridian.reminders dismiss <reminder_id>
+```
 
 ### Talking to it in plain language
 
@@ -700,16 +715,20 @@ python -m meridian.query "hey any thread needs my approval"
 python -m meridian.query "what commitments are open"
 python -m meridian.query "mark the laptop drop-off commitment as done"
 python -m meridian.query "when did I fly to London"
+python -m meridian.query "summarize my recent emails"
+python -m meridian.query "remind me to meet with Nick"
 ```
 
-One cheap Claude call classifies the question (stale threads / open
-commitments / "mark this resolved" / a genuine fact question) before
-routing. Stale threads come back as a natural summary in prose, not a raw
-email dump - it'll only quote the actual message text if you explicitly
-ask to see it. A "mark as resolved" request is matched against your
-currently open threads and commitments; if it's ambiguous (e.g. the same
-email produced both a stale thread and a tracked commitment), it asks you
-to be more specific rather than guessing. Once dismissed, a thread stays
-hidden from future `stale-threads` results (`InboxIntelligenceStore`
-persists this - stale threads used to be recomputed fresh every time with
-no memory of what you'd already handled).
+One cheap Claude call classifies the message into one of six categories -
+stale threads, open commitments, "mark this resolved," a broad recent-
+activity summary, a reminder/task, or a genuine fact question - before
+routing. Stale threads and broad summaries come back as a natural
+summary in prose, not a raw email dump - either will only quote the
+actual message text if you explicitly ask to see it. A "mark as resolved"
+request is matched against your currently open threads, commitments, and
+reminders; if it's ambiguous (e.g. the same email produced both a stale
+thread and a tracked commitment), it asks you to be more specific rather
+than guessing. Once dismissed, a thread stays hidden from future
+`stale-threads` results (`InboxIntelligenceStore` persists this - stale
+threads used to be recomputed fresh every time with no memory of what
+you'd already handled).
