@@ -158,6 +158,15 @@ something in THIS exchange, to personally do something" vs. a standing
 policy/SLA statement. Verified against real data: the two boilerplate-SLA
 false positives are gone, the remaining commitments are all genuine.
 
+Followed up with a deterministic backstop, since LLM judgment alone is
+stochastic: `commitments.py::_looks_like_boilerplate_policy()` rejects
+any candidate whose description/deadline phrase matches known SLA
+language ("business hours," "typically respond within," "standard
+response time") regardless of what the LLM said - the reliable tell
+being that policy text describes a *recurring turnaround window*, not a
+deadline tied to this specific exchange. Verified this catches it even
+when a fake LLM is forced to say yes to boilerplate text.
+
 Also: `digest/gather.py` gained a synthetic count item ("N additional
 email(s) arrived in Promotions/Social/Updates/Forums") since the digest
 now fully excludes those categories (#16) and had no way left to mention
