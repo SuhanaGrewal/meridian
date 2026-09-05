@@ -553,3 +553,41 @@ Run the real one (costs a small amount of real API usage):
 ```
 LLM_API_KEY=<key> MERIDIAN_RUN_LIVE_LLM_TESTS=1 pytest tests/eval/test_answer_eval_real.py -v
 ```
+
+## Scheduling (auto-sync & nightly digest)
+
+Every command in this project is a one-shot CLI with no built-in scheduler
+(see `CLAUDE.md`'s "production-rigor" principle — this is deliberate, not
+an oversight). To actually get Gmail syncing automatically and a digest
+generated nightly, `scripts/install_launchd.sh` installs two macOS
+`launchd` agents:
+
+```
+./scripts/install_launchd.sh
+```
+
+- **Gmail sync every 10 minutes** — runs `python -m meridian.ingestion.gmail`
+  then reindexes just the gmail source, so newly-synced mail is actually
+  queryable within minutes, not just downloaded.
+- **Nightly digest** — fires once daily at 8am by default
+  (`DIGEST_HOUR=7 ./scripts/install_launchd.sh` to change it). To restrict
+  which days it actually runs a digest, set `DIGEST_DAYS` in `.env` (e.g.
+  `DIGEST_DAYS=mon,wed,fri`) — this is checked by `scripts/nightly_digest.sh`
+  itself, so changing it takes effect on the next firing with no need to
+  reinstall the job. Leave `DIGEST_DAYS` empty to run every day.
+
+Safe to re-run `install_launchd.sh` any time (e.g. after changing
+`DIGEST_HOUR`) — it reloads cleanly instead of erroring on an
+already-installed job. Logs land in `logs/launchd-gmailsync.log` and
+`logs/launchd-digest.log`, separate from Meridian's own structured log.
+
+Remove both jobs with:
+
+```
+./scripts/uninstall_launchd.sh
+```
+
+Only Gmail sync and the digest are scheduled today — Calendar, Docs, and
+local-files ingestion still need to be run by hand (`python -m
+meridian.ingestion.calendar`, etc.), or added to `scripts/sync_gmail.sh`'s
+job if you want them on the same 10-minute cadence.
