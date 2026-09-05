@@ -27,16 +27,22 @@ What it'd take:
 - Calendar is the straightforward case: `start_at` is a real forward-dated
   field, so "upcoming calendar events" is a clean, achievable filter today.
 
-### 3. No scheduler — nothing runs automatically
-Every command (ingestion, indexing, digest) is one-shot, run-by-hand only.
-Requested concretely: Gmail auto-sync every 10 minutes, and a nightly
-automatic digest. Both need an external `launchd` (macOS) job wrapping the
-existing CLI commands — doesn't exist yet, but is mechanical (no new
-application logic, just OS-level scheduling of commands that already work).
-- Sub-item: "user chooses which days the digest runs" — there's no
-  login/account concept in this local single-user tool, so "when the user
-  logs in" doesn't map to anything today. Realistic version: a config
-  setting (e.g. `DIGEST_DAYS=mon,wed,fri` in `.env`), not a login screen.
+### 3. No scheduler — nothing runs automatically (Gmail + digest fixed, rest still manual)
+Every command (ingestion, indexing, digest) was one-shot, run-by-hand
+only. `scripts/install_launchd.sh` now installs two macOS `launchd`
+agents: Gmail sync every 10 minutes (then reindexes just the gmail
+source), and a nightly digest at a configurable hour. `DIGEST_DAYS` in
+`.env` restricts which days the digest actually runs (comma-separated
+3-letter day names, e.g. `mon,wed,fri`; empty = every day) - checked by
+`scripts/nightly_digest.sh` itself, not baked into the plist, so it's a
+config setting rather than the "when the user logs in" login-screen
+concept originally requested (there's no login/account system in this
+local single-user tool for that to mean anything). `./scripts/uninstall_launchd.sh`
+removes both jobs. Not installed by me - `launchctl load` is a
+system-level change, left for the user to trigger deliberately.
+- Still manual, not on this scheduler: Calendar, Docs, and local-files
+  ingestion. Could be added to the same 10-minute job or their own
+  cadence if wanted.
 
 ### 9. Follow-up tracking: surface unresolved past questions in the digest
 Nothing today remembers past questions at all — `query` is one-shot and
